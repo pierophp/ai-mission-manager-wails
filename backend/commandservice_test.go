@@ -186,23 +186,22 @@ func createContextsFixture(t *testing.T, databasePath string) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	_, err = db.ExecContext(context.Background(), `
-		CREATE TABLE contexts (
-			id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL,
-			execution_machine_id INTEGER, check_dirty_checkouts INTEGER NOT NULL,
-			grill_agent TEXT NOT NULL, grill_model TEXT NOT NULL, grill_effort TEXT NOT NULL,
-			implement_agent TEXT NOT NULL, implement_model TEXT NOT NULL, implement_effort TEXT NOT NULL,
-			default_workflow TEXT NOT NULL, pstack_agent TEXT NOT NULL, pstack_model TEXT NOT NULL,
-			pstack_effort TEXT NOT NULL, pstack_roles_json TEXT NOT NULL,
-			claude_profile_id INTEGER, codex_profile_id INTEGER,
-			gh_executable_path TEXT, twg_executable_path TEXT, az_executable_path TEXT,
-			atlassian_site TEXT, azure_devops_organization TEXT, bitbucket_workspace TEXT
-		);
-		INSERT INTO contexts VALUES (
-			7, 'Personal', NULL, 1, 'claude', 'claude-sonnet-5', 'high',
-			'codex', 'gpt-6-sol', 'medium', 'matt-pocock', 'claude',
-			'claude-opus-5', 'high', '', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
-		);`)
+	ddl, err := os.ReadFile(filepath.Join("persistence", "testdata", "tauri_schema.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(context.Background(), string(ddl)); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"next_context_id", "next_project_id", "next_item_id", "next_item_number", "next_repository_id", "next_workspace_id", "next_worktree_id", "next_machine_id", "next_cli_profile_id", "next_run_id", "next_external_object_id", "next_link_id", "next_activity_id", "next_reminder_id", "next_audit_id"} {
+		if _, err = db.ExecContext(context.Background(), `INSERT INTO metadata(key,value) VALUES (?,1)`, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = db.ExecContext(context.Background(), `INSERT INTO contexts (
+		id,name,check_dirty_checkouts,grill_agent,grill_model,grill_effort,implement_agent,implement_model,implement_effort,
+		default_workflow,pstack_agent,pstack_model,pstack_effort,pstack_roles_json
+	) VALUES (7,'Personal',1,'claude','claude-sonnet-5','high','codex','gpt-6-sol','medium','matt-pocock','claude','claude-opus-5','high','')`)
 	if err != nil {
 		t.Fatal(err)
 	}

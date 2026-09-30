@@ -1,15 +1,12 @@
 package backend
 
 import (
-	"database/sql"
-	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 
-	_ "modernc.org/sqlite"
+	"github.com/piero/ai-mission-manager-wails/backend/domain"
+	"github.com/piero/ai-mission-manager-wails/backend/persistence"
 )
 
 // ContextReader is the read seam used by the command dispatcher.
@@ -53,62 +50,41 @@ func (r SQLiteContextReader) ListContexts() ([]Context, error) {
 	if _, err := os.Stat(databasePath); err != nil {
 		return nil, fmt.Errorf("open Mission Manager database %q: %w", databasePath, err)
 	}
-	uri := (&url.URL{Scheme: "file", Path: filepath.ToSlash(databasePath)}).String() + "?mode=ro"
-	db, err := sql.Open("sqlite", uri)
+	store, err := persistence.OpenReadOnly(databasePath)
 	if err != nil {
 		return nil, fmt.Errorf("open Mission Manager database: %w", err)
 	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-
-	rows, err := db.Query(`
-		SELECT id, name, execution_machine_id, check_dirty_checkouts,
-		       grill_agent, grill_model, grill_effort,
-		       implement_agent, implement_model, implement_effort,
-		       default_workflow, pstack_agent, pstack_model, pstack_effort,
-		       claude_profile_id, codex_profile_id,
-		       gh_executable_path, twg_executable_path, az_executable_path,
-		       atlassian_site, azure_devops_organization, bitbucket_workspace,
-		       pstack_roles_json
-		FROM contexts ORDER BY id`)
+	defer store.Close()
+	state, err := store.Load()
 	if err != nil {
-		return nil, fmt.Errorf("list contexts: %w", err)
+		return nil, fmt.Errorf("load Mission Manager state: %w", err)
 	}
-	defer rows.Close()
-	contexts := make([]Context, 0)
-	for rows.Next() {
-		var context Context
-		var checkDirty int64
-		var grillAgent, implementAgent, workflow, pstackAgent string
-		var pstackRolesJSON string
-		if err := rows.Scan(
-			&context.ID, &context.Name, &context.ExecutionMachineID, &checkDirty,
-			&grillAgent, &context.GrillDefaults.Model, &context.GrillDefaults.Effort,
-			&implementAgent, &context.ImplementDefaults.Model, &context.ImplementDefaults.Effort,
-			&workflow, &pstackAgent, &context.PstackDefaults.Model, &context.PstackDefaults.Effort,
-			&context.ClaudeProfileID, &context.CodexProfileID,
-			&context.GHExecutablePath, &context.TWGExecutablePath, &context.AZExecutablePath,
-			&context.AtlassianSite, &context.AzureDevOpsOrganization, &context.BitbucketWorkspace,
-			&pstackRolesJSON,
-		); err != nil {
-			return nil, fmt.Errorf("read context row: %w", err)
-		}
-		context.CheckDirtyCheckouts = checkDirty != 0
-		context.GrillDefaults.Agent = grillAgent
-		context.ImplementDefaults.Agent = implementAgent
-		context.DefaultWorkflow = workflow
-		context.PstackDefaults.Agent = pstackAgent
-		if strings.TrimSpace(pstackRolesJSON) == "" {
-			context.PstackRoles = defaultPstackRoles()
-		} else if err := json.Unmarshal([]byte(pstackRolesJSON), &context.PstackRoles); err != nil {
-			return nil, fmt.Errorf("decode context pstack_roles_json: %w", err)
-		}
-		contexts = append(contexts, context)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read contexts: %w", err)
+	contexts := make([]Context, 0, len(state.Contexts))
+	for _, stored := range state.Contexts {
+		contexts = append(contexts, projectContext(stored))
 	}
 	return contexts, nil
+}
+
+func projectContext(stored domain.Context) Context {
+	context := Context{
+		ID: stored.ID, Name: stored.Name, ExecutionMachineID: stored.ExecutionMachineID,
+		ClaudeProfileID: stored.ClaudeProfileID, CodexProfileID: stored.CodexProfileID,
+		CheckDirtyCheckouts: stored.CheckDirtyCheckouts,
+		GrillDefaults:       GrillConfiguration{Agent: string(stored.GrillDefaults.Agent), Model: stored.GrillDefaults.Model, Effort: stored.GrillDefaults.Effort},
+		ImplementDefaults:   GrillConfiguration{Agent: string(stored.ImplementDefaults.Agent), Model: stored.ImplementDefaults.Model, Effort: stored.ImplementDefaults.Effort},
+		DefaultWorkflow:     string(stored.DefaultWorkflow),
+		PstackDefaults:      GrillConfiguration{Agent: string(stored.PstackDefaults.Agent), Model: stored.PstackDefaults.Model, Effort: stored.PstackDefaults.Effort},
+		GHExecutablePath:    stored.GHExecutablePath, TWGExecutablePath: stored.TWGExecutablePath, AZExecutablePath: stored.AZExecutablePath,
+		AtlassianSite: stored.AtlassianSite, AzureDevOpsOrganization: stored.AzureDevOpsOrganization, BitbucketWorkspace: stored.BitbucketWorkspace,
+	}
+	for _, role := range stored.PstackRoles {
+		context.PstackRoles = append(context.PstackRoles, PstackRoleSetting{Role: string(role.Role), Configuration: GrillConfiguration{Agent: string(role.Configuration.Agent), Model: role.Configuration.Model, Effort: role.Configuration.Effort}})
+	}
+	if context.PstackRoles == nil {
+		context.PstackRoles = []PstackRoleSetting{}
+	}
+	return context
 }
 
 type Context struct {
@@ -140,13 +116,4 @@ type GrillConfiguration struct {
 type PstackRoleSetting struct {
 	Role          string             `json:"role"`
 	Configuration GrillConfiguration `json:"configuration"`
-}
-
-func defaultPstackRoles() []PstackRoleSetting {
-	return []PstackRoleSetting{
-		{Role: "code-delegate", Configuration: GrillConfiguration{Agent: "claude", Model: "claude-opus-5", Effort: "high"}},
-		{Role: "judge-and-prose", Configuration: GrillConfiguration{Agent: "codex", Model: "gpt-6-sol", Effort: "high"}},
-		{Role: "review-panel", Configuration: GrillConfiguration{Agent: "codex", Model: "gpt-6-sol", Effort: "high"}},
-		{Role: "explorers", Configuration: GrillConfiguration{Agent: "claude", Model: "claude-sonnet-5", Effort: "medium"}},
-	}
 }

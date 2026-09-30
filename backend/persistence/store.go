@@ -60,6 +60,27 @@ func OpenDefault() (*Store, error) {
 	return Open(filepath.Join(home, ".ai-mission-manager", "mission-manager.sqlite"))
 }
 
+// OpenReadOnly opens an existing database without running initialization or
+// compatibility updates. It is used by read-only projections such as the
+// tracer's list_contexts command.
+func OpenReadOnly(path string) (*Store, error) {
+	if path == "" {
+		return nil, errors.New("database path is required")
+	}
+	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?mode=ro"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open SQLite database: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open SQLite database: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) initialize(ctx context.Context) error {

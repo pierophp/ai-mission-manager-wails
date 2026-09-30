@@ -165,6 +165,9 @@ func TestOpenRealDatabaseCopyWithoutSchemaChanges(t *testing.T) {
 	if after := schemaSnapshot(t, store.db); !equalSchema(after, before) {
 		t.Fatalf("opening real database copy changed sqlite_master\nbefore: %v\nafter: %v", before, after)
 	}
+	if _, err := store.Load(); err != nil {
+		t.Fatalf("load real database copy: %v", err)
+	}
 }
 
 func TestOpenRejectsSchemaBeforeGrillAndOldChecks(t *testing.T) {
