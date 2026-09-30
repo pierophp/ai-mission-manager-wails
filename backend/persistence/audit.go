@@ -25,6 +25,12 @@ func loadAudit(ctx context.Context, db *sql.DB) ([]domain.AuditEntry, error) {
 	})
 }
 
+// ListAuditHistory returns the latest retained audit entries in reverse
+// chronological order, matching the Activity view contract.
+func (s *Store) ListAuditHistory() ([]domain.AuditEntry, error) {
+	return loadAudit(context.Background(), s.db)
+}
+
 func validateAuditAction(raw json.RawMessage) error {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {

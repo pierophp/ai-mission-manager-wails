@@ -124,7 +124,6 @@ func TestBindingsCommandsAreRegisteredOrPendingWithExactArgumentKeys(t *testing.
 	}
 
 	commandPattern := regexp.MustCompile(`__TAURI_INVOKE<.*?>\("([a-z_]+)"(?:,\s*\{([^}]*)\})?\)`)
-	argumentPattern := regexp.MustCompile(`([A-Za-z][A-Za-z0-9]*):`)
 	declared := make(map[string][]string)
 	for _, line := range strings.Split(string(bindings), "\n") {
 		match := commandPattern.FindStringSubmatch(line)
@@ -136,8 +135,11 @@ func TestBindingsCommandsAreRegisteredOrPendingWithExactArgumentKeys(t *testing.
 			t.Fatalf("duplicate binding command %q", name)
 		}
 		var args []string
-		for _, argument := range argumentPattern.FindAllStringSubmatch(match[2], -1) {
-			args = append(args, argument[1])
+		for _, argument := range strings.Split(match[2], ",") {
+			key := strings.TrimSpace(strings.SplitN(argument, ":", 2)[0])
+			if key != "" {
+				args = append(args, key)
+			}
 		}
 		sort.Strings(args)
 		declared[name] = args

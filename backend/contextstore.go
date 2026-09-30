@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/piero/ai-mission-manager-wails/backend/domain"
 	"github.com/piero/ai-mission-manager-wails/backend/persistence"
@@ -18,15 +19,90 @@ type ContextReader interface {
 // adapters. The first tracer operation reads Contexts from its persistence
 // seam; later operations extend this shared runtime.
 type Runtime struct {
-	contexts ContextReader
+	contexts     ContextReader
+	mu           sync.Mutex
+	transitionMu sync.Mutex
+	state        domain.DomainState
+	store        *persistence.Store
+	events       EventEmitter
 }
 
 func NewRuntime(contexts ContextReader) *Runtime {
-	return &Runtime{contexts: contexts}
+	return &Runtime{contexts: contexts, events: discardEventEmitter{}}
+}
+
+// OpenRuntime opens a writable application Runtime backed by the shared store.
+func OpenRuntime(path string) (*Runtime, error) {
+	store, err := persistence.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	state, err := store.Load()
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	return &Runtime{store: store, state: state, events: discardEventEmitter{}}, nil
+}
+
+func OpenDefaultRuntime() (*Runtime, error) {
+	store, err := persistence.OpenDefault()
+	if err != nil {
+		return nil, err
+	}
+	state, err := store.Load()
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	return &Runtime{store: store, state: state, events: discardEventEmitter{}}, nil
+}
+
+func (r *Runtime) SetEventEmitter(emitter EventEmitter) {
+	if r == nil {
+		return
+	}
+	if emitter == nil {
+		emitter = discardEventEmitter{}
+	}
+	r.mu.Lock()
+	r.events = emitter
+	r.mu.Unlock()
+}
+
+func (r *Runtime) EmitEvent(name string, payload any) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	emitter := r.events
+	r.mu.Unlock()
+	if emitter != nil {
+		emitter.Emit(name, payload)
+	}
+}
+
+func (r *Runtime) Close() error {
+	if r == nil || r.store == nil {
+		return nil
+	}
+	return r.store.Close()
 }
 
 func (r *Runtime) ListContexts() ([]Context, error) {
-	if r == nil || r.contexts == nil {
+	if r == nil {
+		return nil, fmt.Errorf("context reader is not configured")
+	}
+	if r.store != nil {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		out := make([]Context, 0, len(r.state.Contexts))
+		for _, value := range r.state.Contexts {
+			out = append(out, projectContext(value))
+		}
+		return out, nil
+	}
+	if r.contexts == nil {
 		return nil, fmt.Errorf("context reader is not configured")
 	}
 	return r.contexts.ListContexts()

@@ -13,7 +13,11 @@ import (
 var assets embed.FS
 
 func main() {
-	runtime := backend.NewRuntime(backend.SQLiteContextReader{})
+	runtime, err := backend.OpenDefaultRuntime()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer runtime.Close()
 	commands := &backend.CommandService{Runtime: runtime}
 	platform := &backend.PlatformService{}
 	app := application.New(application.Options{
@@ -33,6 +37,9 @@ func main() {
 			UniqueID: "com.piero.aimissionmanager",
 		},
 	})
+	runtime.SetEventEmitter(backend.EventEmitterFunc(func(name string, payload any) {
+		app.Event.Emit(name, payload)
+	}))
 
 	platform.OpenURLFunc = app.Browser.OpenURL
 	platform.RevealItemFunc = func(path string) error {
