@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.1.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.1.0",
+			"CompanyName": "AI Mission Manager",
+			"FileDescription": "Desktop mission manager",
+			"LegalCopyright": "© 2026, AI Mission Manager",
+			"ProductName": "AI Mission Manager",
+			"Comments": "AI Mission Manager desktop application"
+		}
+	}
+}

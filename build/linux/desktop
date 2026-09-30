@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=AI Mission Manager
+Comment=Desktop mission manager
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/ai-mission-manager %u
+Terminal=false
+Type=Application
+Icon=ai-mission-manager
+Categories=Utility;
+StartupWMClass=ai-mission-manager
+
+ 
