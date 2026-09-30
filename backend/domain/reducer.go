@@ -421,6 +421,260 @@ func Decide(input DomainState, event Event) (Decision, error) {
 		}
 		state.Projects[idx] = p
 		return Decision{State: state, Effects: []Effect{{Kind: "update_project", Project: &p}}}, nil
+	case "register_repository", "update_repository", "register_repository_at_location", "update_repository_location":
+		cleanRepositoryName := func(name string) (string, error) {
+			name = clean(name)
+			if name == "" {
+				return "", DomainError("a Repository name cannot be blank")
+			}
+			if name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
+				return "", DomainError("a Repository name must be a single directory name")
+			}
+			return name, nil
+		}
+		if event.Kind == "register_repository" || event.Kind == "register_repository_at_location" {
+			name, err := cleanRepositoryName(event.Name)
+			if err != nil {
+				return Decision{}, err
+			}
+			remote := clean(event.RemoteURL)
+			if remote == "" {
+				return Decision{}, DomainError("a Repository remote URL cannot be blank")
+			}
+			projectIndex := -1
+			for i := range state.Projects {
+				if state.Projects[i].ID == event.ProjectID {
+					projectIndex = i
+					break
+				}
+			}
+			if projectIndex < 0 {
+				return Decision{}, DomainError("Project " + itoa(event.ProjectID) + " does not exist")
+			}
+			if event.Kind == "register_repository" {
+				for _, repository := range state.Repositories {
+					if repository.ProjectID == event.ProjectID && repository.Name == name {
+						return Decision{}, DomainError("Repository name already exists in Project " + itoa(event.ProjectID) + ": " + name)
+					}
+				}
+				if state.NextRepositoryID < 1 || state.NextRepositoryID == 1<<63-1 {
+					return Decision{}, DomainError("the Item identifier sequence is exhausted")
+				}
+				repository := Repository{ID: state.NextRepositoryID, ProjectID: event.ProjectID, Name: name, RemoteURL: remote, BaseBranch: "main"}
+				state.NextRepositoryID++
+				state.Repositories = append(state.Repositories, repository)
+				return Decision{State: state, Effects: []Effect{{Kind: "persist_repository", Repository: &repository}}}, nil
+			}
+			baseBranch := clean(event.BaseBranch)
+			if baseBranch == "" {
+				return Decision{}, DomainError("a Repository base branch cannot be blank")
+			}
+			locationPath, worktreeRoot := clean(event.CheckoutPath), clean(event.WorktreeRoot)
+			if locationPath == "" {
+				return Decision{}, DomainError("a Repository checkout path cannot be blank")
+			}
+			if worktreeRoot == "" {
+				return Decision{}, DomainError("a Repository Worktree root cannot be blank")
+			}
+			machineIndex := -1
+			for i := range state.Machines {
+				if state.Machines[i].ID == event.MachineID {
+					machineIndex = i
+					break
+				}
+			}
+			if machineIndex < 0 {
+				return Decision{}, DomainError("Machine " + itoa(event.MachineID) + " does not exist")
+			}
+			if state.Machines[machineIndex].ContextID != state.Projects[projectIndex].ContextID {
+				return Decision{}, DomainError(fmt.Sprintf("Machine %d belongs to another Context", event.MachineID))
+			}
+			var existing *Repository
+			for i := range state.Repositories {
+				if state.Repositories[i].ProjectID == event.ProjectID && state.Repositories[i].Name == name {
+					existing = &state.Repositories[i]
+					break
+				}
+			}
+			if existing != nil {
+				if existing.RemoteURL != remote {
+					return Decision{}, DomainError(fmt.Sprintf("Repository %s in Project %d has a different remote URL", name, event.ProjectID))
+				}
+				for _, location := range state.RepositoryLocations {
+					if location.RepositoryID == existing.ID && location.MachineID == event.MachineID {
+						return Decision{}, DomainError(fmt.Sprintf("Repository %d has already been configured on Machine %d", existing.ID, event.MachineID))
+					}
+				}
+				existing.BaseBranch = baseBranch
+				location := RepositoryLocation{RepositoryID: existing.ID, MachineID: event.MachineID, CheckoutPath: locationPath, WorktreeRoot: worktreeRoot}
+				state.RepositoryLocations = append(state.RepositoryLocations, location)
+				return Decision{State: state, Effects: []Effect{{Kind: "update_repository", Repository: existing}, {Kind: "persist_repository_location", RepositoryLocation: &location}}}, nil
+			}
+			if state.NextRepositoryID < 1 || state.NextRepositoryID == 1<<63-1 {
+				return Decision{}, DomainError("the Item identifier sequence is exhausted")
+			}
+			repository := Repository{ID: state.NextRepositoryID, ProjectID: event.ProjectID, Name: name, RemoteURL: remote, BaseBranch: baseBranch}
+			location := RepositoryLocation{RepositoryID: repository.ID, MachineID: event.MachineID, CheckoutPath: locationPath, WorktreeRoot: worktreeRoot}
+			state.NextRepositoryID++
+			state.Repositories = append(state.Repositories, repository)
+			state.RepositoryLocations = append(state.RepositoryLocations, location)
+			return Decision{State: state, Effects: []Effect{{Kind: "persist_repository_at_location", Repository: &repository, RepositoryLocation: &location}}}, nil
+		}
+		if event.Kind == "update_repository" {
+			name, err := cleanRepositoryName(event.Name)
+			if err != nil {
+				return Decision{}, err
+			}
+			remote, baseBranch := clean(event.RemoteURL), clean(event.BaseBranch)
+			if remote == "" {
+				return Decision{}, DomainError("a Repository remote URL cannot be blank")
+			}
+			if baseBranch == "" {
+				return Decision{}, DomainError("a Repository base branch cannot be blank")
+			}
+			index := -1
+			for i := range state.Repositories {
+				if state.Repositories[i].ID == event.RepositoryID {
+					index = i
+					break
+				}
+			}
+			if index < 0 {
+				return Decision{}, DomainError("Repository " + itoa(event.RepositoryID) + " does not exist")
+			}
+			projectID := state.Repositories[index].ProjectID
+			for _, other := range state.Repositories {
+				if other.ID != event.RepositoryID && other.ProjectID == projectID && other.Name == name {
+					return Decision{}, DomainError("Repository name already exists in Project " + itoa(projectID) + ": " + name)
+				}
+			}
+			state.Repositories[index].Name, state.Repositories[index].RemoteURL, state.Repositories[index].BaseBranch = name, remote, baseBranch
+			repository := state.Repositories[index]
+			return Decision{State: state, Effects: []Effect{{Kind: "update_repository", Repository: &repository}}}, nil
+		}
+		index := -1
+		for i := range state.Repositories {
+			if state.Repositories[i].ID == event.RepositoryID {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			return Decision{}, DomainError("Repository " + itoa(event.RepositoryID) + " does not exist")
+		}
+		projectIndex := -1
+		for i := range state.Projects {
+			if state.Projects[i].ID == state.Repositories[index].ProjectID {
+				projectIndex = i
+				break
+			}
+		}
+		machineIndex := -1
+		for i := range state.Machines {
+			if state.Machines[i].ID == event.MachineID {
+				machineIndex = i
+				break
+			}
+		}
+		if projectIndex < 0 {
+			return Decision{}, DomainError("Project does not exist")
+		}
+		if machineIndex < 0 {
+			return Decision{}, DomainError("Machine " + itoa(event.MachineID) + " does not exist")
+		}
+		if state.Machines[machineIndex].ContextID != state.Projects[projectIndex].ContextID {
+			return Decision{}, DomainError(fmt.Sprintf("Machine %d belongs to another Context", event.MachineID))
+		}
+		if event.PreviousMachineID != nil {
+			found := false
+			for _, location := range state.RepositoryLocations {
+				if location.RepositoryID == event.RepositoryID && location.MachineID == *event.PreviousMachineID {
+					found = true
+				}
+			}
+			if !found {
+				return Decision{}, DomainError(fmt.Sprintf("Repository %d has no location on Machine %d", event.RepositoryID, *event.PreviousMachineID))
+			}
+		}
+		if event.PreviousMachineID == nil || *event.PreviousMachineID != event.MachineID {
+			for _, location := range state.RepositoryLocations {
+				if location.RepositoryID == event.RepositoryID && location.MachineID == event.MachineID {
+					return Decision{}, DomainError(fmt.Sprintf("Repository %d has already been configured on Machine %d", event.RepositoryID, event.MachineID))
+				}
+			}
+		}
+		checkoutPath, root := clean(event.CheckoutPath), clean(event.WorktreeRoot)
+		if checkoutPath == "" {
+			return Decision{}, DomainError("a Repository checkout path cannot be blank")
+		}
+		if root == "" {
+			return Decision{}, DomainError("a Repository Worktree root cannot be blank")
+		}
+		locations := make([]RepositoryLocation, 0, len(state.RepositoryLocations)+1)
+		for _, location := range state.RepositoryLocations {
+			if event.PreviousMachineID == nil || location.RepositoryID != event.RepositoryID || location.MachineID != *event.PreviousMachineID {
+				locations = append(locations, location)
+			}
+		}
+		location := RepositoryLocation{RepositoryID: event.RepositoryID, MachineID: event.MachineID, CheckoutPath: checkoutPath, WorktreeRoot: root}
+		locations = append(locations, location)
+		state.RepositoryLocations = locations
+		return Decision{State: state, Effects: []Effect{{Kind: "update_repository_location", RepositoryLocation: &location, PreviousMachineID: event.PreviousMachineID}}}, nil
+	case "ensure_project_workspaces":
+		var effects []Effect
+		for _, item := range state.Items {
+			desired := make([]WorkspaceRepository, 0)
+			for _, repository := range state.Repositories {
+				if repository.ProjectID != item.ProjectID {
+					continue
+				}
+				branch := "mission-" + item.HumanIdentifier
+				for _, workspace := range state.Workspaces {
+					if workspace.ItemID != item.ID {
+						continue
+					}
+					for _, selected := range workspace.Repositories {
+						if selected.RepositoryID == repository.ID {
+							branch = selected.Branch
+						}
+					}
+				}
+				desired = append(desired, WorkspaceRepository{RepositoryID: repository.ID, Branch: branch, BaseBranch: repository.BaseBranch})
+			}
+			var itemWorkspaces []Workspace
+			for _, workspace := range state.Workspaces {
+				if workspace.ItemID == item.ID {
+					itemWorkspaces = append(itemWorkspaces, workspace)
+				}
+			}
+			if len(itemWorkspaces) == 0 {
+				if len(desired) == 0 {
+					continue
+				}
+				if state.NextWorkspaceID < 1 || state.NextWorkspaceID == math.MaxInt64 {
+					return Decision{}, DomainError("the Item identifier sequence is exhausted")
+				}
+				workspace := Workspace{ID: state.NextWorkspaceID, ItemID: item.ID, Repositories: desired, PreparationState: WorkspacePending}
+				state.NextWorkspaceID++
+				state.Workspaces = append(state.Workspaces, workspace)
+				effects = append(effects, Effect{Kind: "persist_workspace", Workspace: &workspace})
+				continue
+			}
+			for _, current := range itemWorkspaces {
+				if equalWorkspaceRepositorySet(current.Repositories, desired) {
+					continue
+				}
+				for i := range state.Workspaces {
+					if state.Workspaces[i].ID == current.ID {
+						state.Workspaces[i].Repositories = append([]WorkspaceRepository{}, desired...)
+					}
+				}
+				updated := current
+				updated.Repositories = append([]WorkspaceRepository{}, desired...)
+				effects = append(effects, Effect{Kind: "update_workspace_repositories", Workspace: &updated})
+			}
+		}
+		return Decision{State: state, Effects: effects}, nil
 	case "create_item":
 		title := strings.TrimSpace(event.Name)
 		if title == "" {
@@ -587,6 +841,18 @@ func hasContext(s DomainState, id int64) bool {
 	return false
 }
 func itoa(value int64) string { return strconv.FormatInt(value, 10) }
+
+func equalWorkspaceRepositorySet(left, right []WorkspaceRepository) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
 
 func hasMachine(s DomainState, id int64) bool {
 	for _, m := range s.Machines {

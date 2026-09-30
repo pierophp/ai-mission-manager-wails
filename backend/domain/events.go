@@ -37,6 +37,12 @@ type Event struct {
 	FromItemID         int64
 	ToItemID           int64
 	RelationKind       ItemRelationKind
+	RepositoryID       int64
+	PreviousMachineID  *int64
+	RemoteURL          string
+	BaseBranch         string
+	CheckoutPath       string
+	WorktreeRoot       string
 }
 
 type ContextConfiguration struct {
@@ -60,14 +66,18 @@ type ContextConfiguration struct {
 }
 
 type Effect struct {
-	Kind              EffectKind
-	Context           *Context
-	Project           *Project
-	Machine           *Machine
-	CLIProfile        *CLIConfigurationProfile
-	Item              *Item
-	Relation          *ItemRelation
-	AttentionDefaults []ContextAttentionDefault
+	Kind               EffectKind
+	Context            *Context
+	Project            *Project
+	Machine            *Machine
+	CLIProfile         *CLIConfigurationProfile
+	Item               *Item
+	Relation           *ItemRelation
+	Repository         *Repository
+	RepositoryLocation *RepositoryLocation
+	PreviousMachineID  *int64
+	AttentionDefaults  []ContextAttentionDefault
+	Workspace          *Workspace
 }
 
 type Decision struct {

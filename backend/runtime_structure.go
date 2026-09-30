@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 
 	"github.com/piero/ai-mission-manager-wails/backend/domain"
+	"github.com/piero/ai-mission-manager-wails/backend/gitcli"
 	"github.com/piero/ai-mission-manager-wails/backend/persistence"
 )
 
@@ -53,11 +56,16 @@ func (r *Runtime) persistDecisionLocked(snapshot domain.DomainState, decision *d
 	r.mu.Lock()
 	r.state = decision.State
 	r.mu.Unlock()
+	for _, effect := range decision.Effects {
+		if effect.Kind == "persist_repository" || effect.Kind == "persist_repository_at_location" || effect.Kind == "update_repository" || effect.Kind == "persist_item" {
+			return r.ensureProjectWorkspacesLocked()
+		}
+	}
 	return nil
 }
 
 func sameSequences(a, b domain.DomainState) bool {
-	return a.NextContextID == b.NextContextID && a.NextProjectID == b.NextProjectID && a.NextAuditID == b.NextAuditID
+	return a.NextContextID == b.NextContextID && a.NextProjectID == b.NextProjectID && a.NextRepositoryID == b.NextRepositoryID && a.NextWorkspaceID == b.NextWorkspaceID && a.NextItemID == b.NextItemID && a.NextAuditID == b.NextAuditID
 }
 
 func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persistence.AuditAction, error) {
@@ -113,6 +121,41 @@ func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persis
 				return nil, nil, errors.New("CLI profile effect has no profile")
 			}
 			out = append(out, persistence.Effect{SQL: `DELETE FROM cli_configuration_profiles WHERE id=?`, Args: []any{p.ID}})
+		case "persist_repository", "persist_repository_at_location", "update_repository":
+			repository := effect.Repository
+			if repository == nil {
+				return nil, nil, errors.New("repository effect has no Repository")
+			}
+			if effect.Kind == "persist_repository" || effect.Kind == "persist_repository_at_location" {
+				out = append(out, persistence.Effect{SQL: `INSERT INTO repositories(id,project_id,name,remote_url,base_branch) VALUES(?,?,?,?,?)`, Args: []any{repository.ID, repository.ProjectID, repository.Name, repository.RemoteURL, repository.BaseBranch}, InsertedSequence: "next_repository_id", InsertedID: repository.ID})
+				audit = append(audit, auditJSON("repositoryRegistered", "repository_id", repository.ID))
+			} else {
+				out = append(out, persistence.Effect{SQL: `UPDATE repositories SET name=?,remote_url=?,base_branch=? WHERE id=?`, Args: []any{repository.Name, repository.RemoteURL, repository.BaseBranch, repository.ID}})
+			}
+			if effect.Kind == "persist_repository_at_location" {
+				if effect.RepositoryLocation == nil {
+					return nil, nil, errors.New("repository location effect has no location")
+				}
+				out = append(out, repositoryLocationInsert(*effect.RepositoryLocation))
+			}
+		case "persist_repository_location":
+			if effect.RepositoryLocation == nil {
+				return nil, nil, errors.New("repository location effect has no location")
+			}
+			out = append(out, repositoryLocationInsert(*effect.RepositoryLocation))
+		case "update_repository_location":
+			if effect.RepositoryLocation == nil {
+				return nil, nil, errors.New("repository location effect has no location")
+			}
+			location := effect.RepositoryLocation
+			if effect.PreviousMachineID != nil && *effect.PreviousMachineID == location.MachineID {
+				out = append(out, persistence.Effect{SQL: `UPDATE repository_locations SET checkout_path=?,worktree_root=? WHERE repository_id=? AND machine_id=?`, Args: []any{location.CheckoutPath, location.WorktreeRoot, location.RepositoryID, location.MachineID}})
+			} else {
+				if effect.PreviousMachineID != nil {
+					out = append(out, persistence.Effect{SQL: `DELETE FROM repository_locations WHERE repository_id=? AND machine_id=?`, Args: []any{location.RepositoryID, *effect.PreviousMachineID}})
+				}
+				out = append(out, repositoryLocationInsert(*location))
+			}
 		case "update_context":
 			c := effect.Context
 			if c == nil {
@@ -158,6 +201,10 @@ func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persis
 		}
 	}
 	return out, audit, nil
+}
+
+func repositoryLocationInsert(location domain.RepositoryLocation) persistence.Effect {
+	return persistence.Effect{SQL: `INSERT INTO repository_locations(repository_id,machine_id,checkout_path,worktree_root) VALUES(?,?,?,?)`, Args: []any{location.RepositoryID, location.MachineID, location.CheckoutPath, location.WorktreeRoot}}
 }
 
 func pstackRolesJSON(roles domain.PstackRoleTable) string {
@@ -256,4 +303,239 @@ func (r *Runtime) listAttentionDefaults() []domain.ContextAttentionDefault {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]domain.ContextAttentionDefault{}, r.state.AttentionDefaults...)
+}
+
+func (r *Runtime) listRepositories() []domain.Repository {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]domain.Repository{}, r.state.Repositories...)
+}
+
+func (r *Runtime) listRepositoryLocations() []domain.RepositoryLocation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]domain.RepositoryLocation{}, r.state.RepositoryLocations...)
+}
+
+func (r *Runtime) registerRepository(projectID int64, name, remoteURL string) (domain.Repository, error) {
+	decision, err := r.transition(domain.Event{Kind: "register_repository", ProjectID: projectID, Name: name, RemoteURL: remoteURL})
+	if err != nil {
+		return domain.Repository{}, err
+	}
+	repository := decision.State.Repositories[len(decision.State.Repositories)-1]
+	return repository, nil
+}
+
+func (r *Runtime) updateRepository(repositoryID int64, name, remoteURL, baseBranch string) (domain.Repository, error) {
+	decision, err := r.transition(domain.Event{Kind: "update_repository", RepositoryID: repositoryID, Name: name, RemoteURL: remoteURL, BaseBranch: baseBranch})
+	if err != nil {
+		return domain.Repository{}, err
+	}
+	var repository domain.Repository
+	for _, candidate := range decision.State.Repositories {
+		if candidate.ID == repositoryID {
+			repository = candidate
+			break
+		}
+	}
+	return repository, nil
+}
+
+func (r *Runtime) registerRepositoryAtLocation(projectID int64, name string, remoteURL *string, baseBranch string, machineID int64, checkoutPath string, worktreeRoot *string, clone bool) (domain.Repository, error) {
+	r.mu.Lock()
+	stateSnapshot := r.state
+	var project *domain.Project
+	var machine *domain.Machine
+	for i := range r.state.Projects {
+		if r.state.Projects[i].ID == projectID {
+			p := r.state.Projects[i]
+			project = &p
+			break
+		}
+	}
+	for i := range r.state.Machines {
+		if r.state.Machines[i].ID == machineID {
+			m := r.state.Machines[i]
+			machine = &m
+			break
+		}
+	}
+	access := r.machineAccess
+	r.mu.Unlock()
+	if project == nil {
+		return domain.Repository{}, fmt.Errorf("Project %d does not exist", projectID)
+	}
+	if machine == nil {
+		return domain.Repository{}, fmt.Errorf("Machine %d does not exist", machineID)
+	}
+	if machine.ContextID != project.ContextID {
+		return domain.Repository{}, fmt.Errorf("Machine %d belongs to another Context", machineID)
+	}
+	home, err := access.HomeDirectory(*machine)
+	if err != nil {
+		return domain.Repository{}, err
+	}
+	checkoutPath = normalizeRepositoryPath(checkoutPath, home)
+	root := "~/worktrees"
+	if worktreeRoot != nil && strings.TrimSpace(*worktreeRoot) != "" {
+		root = *worktreeRoot
+	}
+	root = normalizeRepositoryPath(root, home)
+	resolved, err := access.ResolvePath(*machine, checkoutPath)
+	if err != nil {
+		return domain.Repository{}, err
+	}
+	git := gitcli.New(access)
+	effectiveRemote := ""
+	if clone {
+		if remoteURL == nil || strings.TrimSpace(*remoteURL) == "" {
+			return domain.Repository{}, errors.New("A remote URL is required when cloning a Repository")
+		}
+		if _, err := domain.Decide(stateSnapshot, domain.Event{Kind: "register_repository_at_location", ProjectID: projectID, Name: name, RemoteURL: *remoteURL, BaseBranch: baseBranch, MachineID: machineID, CheckoutPath: checkoutPath, WorktreeRoot: root}); err != nil {
+			return domain.Repository{}, err
+		}
+		if err := git.Clone(*machine, *remoteURL, resolved); err != nil {
+			return domain.Repository{}, err
+		}
+		effectiveRemote = strings.TrimSpace(*remoteURL)
+		_, err := git.Adopt(*machine, resolved, effectiveRemote)
+		if err != nil {
+			return domain.Repository{}, fmt.Errorf("Repository was cloned, but its checkout could not be inspected: %w; the cloned checkout remains at %s", err, checkoutPath)
+		}
+	} else {
+		expectedRemote := ""
+		if remoteURL != nil {
+			expectedRemote = *remoteURL
+		}
+		inspection, err := git.Adopt(*machine, resolved, expectedRemote)
+		if err != nil {
+			return domain.Repository{}, err
+		}
+		effectiveRemote = inspection.RemoteURL
+		if effectiveRemote == "" {
+			return domain.Repository{}, errors.New("The existing checkout has no Git remote")
+		}
+	}
+	r.mu.Lock()
+	currentState := r.state
+	r.mu.Unlock()
+	if !repositoryRegistrationSnapshotIsCurrent(stateSnapshot, currentState, projectID, machineID) {
+		err := errors.New("The Project, Machine, or Repository registration changed while Git was inspecting the checkout; review it again")
+		if clone {
+			return domain.Repository{}, fmt.Errorf("%w; the cloned checkout remains at %s", err, checkoutPath)
+		}
+		return domain.Repository{}, err
+	}
+	decision, err := r.transition(domain.Event{Kind: "register_repository_at_location", ProjectID: projectID, Name: name, RemoteURL: effectiveRemote, BaseBranch: baseBranch, MachineID: machineID, CheckoutPath: checkoutPath, WorktreeRoot: root})
+	if err != nil {
+		if clone {
+			return domain.Repository{}, fmt.Errorf("%w; the cloned checkout remains at %s", err, checkoutPath)
+		}
+		return domain.Repository{}, err
+	}
+	var repository domain.Repository
+	for i := range decision.State.Repositories {
+		if decision.State.Repositories[i].ProjectID == projectID && decision.State.Repositories[i].Name == strings.TrimSpace(name) {
+			repository = decision.State.Repositories[i]
+			break
+		}
+	}
+	if repository.ID == 0 {
+		return domain.Repository{}, errors.New("Repository registration produced no Repository")
+	}
+	return repository, nil
+}
+
+func repositoryRegistrationSnapshotIsCurrent(before, after domain.DomainState, projectID, machineID int64) bool {
+	var beforeProject, afterProject *domain.Project
+	var beforeMachine, afterMachine *domain.Machine
+	for i := range before.Projects {
+		if before.Projects[i].ID == projectID {
+			value := before.Projects[i]
+			beforeProject = &value
+		}
+	}
+	for i := range after.Projects {
+		if after.Projects[i].ID == projectID {
+			value := after.Projects[i]
+			afterProject = &value
+		}
+	}
+	for i := range before.Machines {
+		if before.Machines[i].ID == machineID {
+			value := before.Machines[i]
+			beforeMachine = &value
+		}
+	}
+	for i := range after.Machines {
+		if after.Machines[i].ID == machineID {
+			value := after.Machines[i]
+			afterMachine = &value
+		}
+	}
+	if !reflect.DeepEqual(beforeProject, afterProject) || !reflect.DeepEqual(beforeMachine, afterMachine) {
+		return false
+	}
+	repositoriesForProject := func(state domain.DomainState) []domain.Repository {
+		var repositories []domain.Repository
+		for _, repository := range state.Repositories {
+			if repository.ProjectID == projectID {
+				repositories = append(repositories, repository)
+			}
+		}
+		return repositories
+	}
+	if !reflect.DeepEqual(repositoriesForProject(before), repositoriesForProject(after)) {
+		return false
+	}
+	repositoryIDs := make(map[int64]bool)
+	for _, repository := range repositoriesForProject(before) {
+		repositoryIDs[repository.ID] = true
+	}
+	locationsForProject := func(state domain.DomainState) []domain.RepositoryLocation {
+		var locations []domain.RepositoryLocation
+		for _, location := range state.RepositoryLocations {
+			if repositoryIDs[location.RepositoryID] {
+				locations = append(locations, location)
+			}
+		}
+		return locations
+	}
+	return reflect.DeepEqual(locationsForProject(before), locationsForProject(after))
+}
+
+func (r *Runtime) updateRepositoryLocation(repositoryID int64, previousMachineID *int64, machineID int64, checkoutPath, worktreeRoot string) (domain.RepositoryLocation, error) {
+	decision, err := r.transition(domain.Event{Kind: "update_repository_location", RepositoryID: repositoryID, PreviousMachineID: previousMachineID, MachineID: machineID, CheckoutPath: checkoutPath, WorktreeRoot: worktreeRoot})
+	if err != nil {
+		return domain.RepositoryLocation{}, err
+	}
+	for _, location := range decision.State.RepositoryLocations {
+		if location.RepositoryID == repositoryID && location.MachineID == machineID {
+			return location, nil
+		}
+	}
+	return domain.RepositoryLocation{}, errors.New("Repository location update produced no location")
+}
+
+func normalizeRepositoryPath(path, home string) string {
+	path = strings.TrimSpace(path)
+	path = strings.TrimRight(path, "/")
+	if path == "" {
+		return ""
+	}
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home = strings.TrimRight(strings.TrimSpace(home), "/")
+	if home != "" && (path == home || strings.HasPrefix(path, home+"/")) {
+		relative := strings.TrimLeft(strings.TrimPrefix(path, home), "/")
+		if relative == "" {
+			return "~"
+		}
+		return "~/" + relative
+	}
+	if strings.HasPrefix(path, "/") {
+		return path
+	}
+	return "~/" + path
 }

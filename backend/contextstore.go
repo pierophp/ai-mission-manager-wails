@@ -48,7 +48,12 @@ func OpenRuntime(path string) (*Runtime, error) {
 		return nil, err
 	}
 	access := LocalSSHMachineAccess{}
-	return newRuntime(nil, store, state, access), nil
+	runtime := newRuntime(nil, store, state, access)
+	if err := runtime.ensureProjectWorkspaces(); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	return runtime, nil
 }
 
 func OpenDefaultRuntime() (*Runtime, error) {
@@ -62,7 +67,12 @@ func OpenDefaultRuntime() (*Runtime, error) {
 		return nil, err
 	}
 	access := LocalSSHMachineAccess{}
-	return newRuntime(nil, store, state, access), nil
+	runtime := newRuntime(nil, store, state, access)
+	if err := runtime.ensureProjectWorkspaces(); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	return runtime, nil
 }
 
 func newRuntime(contexts ContextReader, store *persistence.Store, state domain.DomainState, access MachineAccess) *Runtime {

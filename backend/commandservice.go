@@ -44,6 +44,82 @@ var commandHandlers = map[string]commandHandler{
 		v := s.Runtime.listProjects()
 		return v, nil
 	}),
+	"list_repositories": noArgs(func(s *CommandService) (any, error) {
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.listRepositories(), nil
+	}),
+	"list_repository_locations": noArgs(func(s *CommandService) (any, error) {
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.listRepositoryLocations(), nil
+	}),
+	"register_repository": withArgs([]string{"projectId", "name", "remoteUrl"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ProjectID int64  `json:"projectId"`
+			Name      string `json:"name"`
+			RemoteURL string `json:"remoteUrl"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.registerRepository(a.ProjectID, a.Name, a.RemoteURL)
+	}),
+	"update_repository": withArgs([]string{"repositoryId", "name", "remoteUrl", "baseBranch"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			RepositoryID int64  `json:"repositoryId"`
+			Name         string `json:"name"`
+			RemoteURL    string `json:"remoteUrl"`
+			BaseBranch   string `json:"baseBranch"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.updateRepository(a.RepositoryID, a.Name, a.RemoteURL, a.BaseBranch)
+	}),
+	"register_repository_at_location": withArgs([]string{"projectId", "name", "remoteUrl", "baseBranch", "machineId", "checkoutPath", "worktreeRoot", "cloneIntoDestination"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ProjectID            int64   `json:"projectId"`
+			Name                 string  `json:"name"`
+			RemoteURL            *string `json:"remoteUrl"`
+			BaseBranch           string  `json:"baseBranch"`
+			MachineID            int64   `json:"machineId"`
+			CheckoutPath         string  `json:"checkoutPath"`
+			WorktreeRoot         *string `json:"worktreeRoot"`
+			CloneIntoDestination bool    `json:"cloneIntoDestination"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.registerRepositoryAtLocation(a.ProjectID, a.Name, a.RemoteURL, a.BaseBranch, a.MachineID, a.CheckoutPath, a.WorktreeRoot, a.CloneIntoDestination)
+	}),
+	"update_repository_location": withArgs([]string{"repositoryId", "previousMachineId", "machineId", "checkoutPath", "worktreeRoot"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			RepositoryID      int64  `json:"repositoryId"`
+			PreviousMachineID *int64 `json:"previousMachineId"`
+			MachineID         int64  `json:"machineId"`
+			CheckoutPath      string `json:"checkoutPath"`
+			WorktreeRoot      string `json:"worktreeRoot"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.updateRepositoryLocation(a.RepositoryID, a.PreviousMachineID, a.MachineID, a.CheckoutPath, a.WorktreeRoot)
+	}),
 	"list_machines": noArgs(func(s *CommandService) (any, error) {
 		if !writable(s) {
 			return nil, errors.New("runtime is not configured")
@@ -388,10 +464,11 @@ var commandHandlers = map[string]commandHandler{
 }
 
 var registeredCommandArguments = map[string][]string{
-	"list_contexts": {}, "new_context_configuration": {}, "list_context_attention_defaults": {}, "list_projects": {}, "list_audit_history": {}, "get_activity_tab": {},
+	"list_contexts": {}, "new_context_configuration": {}, "list_context_attention_defaults": {}, "list_projects": {}, "list_repositories": {}, "list_repository_locations": {}, "list_audit_history": {}, "get_activity_tab": {},
 	"create_context": {"name"}, "create_context_configuration": {"configuration"}, "update_context": {"contextId", "name"}, "update_context_configuration": {"contextId", "configuration"},
 	"set_context_grill_defaults": {"contextId", "defaults"}, "set_context_implement_defaults": {"contextId", "defaults"}, "set_context_dirty_checkout_check": {"contextId", "enabled"},
 	"set_context_attention_default": {"contextId", "objectKind", "policy"}, "create_project": {"name", "contextId", "defaultItemStatus", "executionMode"}, "update_project": {"projectId", "name", "defaultItemStatus", "executionMode"},
+	"register_repository": {"projectId", "name", "remoteUrl"}, "update_repository": {"repositoryId", "name", "remoteUrl", "baseBranch"}, "register_repository_at_location": {"projectId", "name", "remoteUrl", "baseBranch", "machineId", "checkoutPath", "worktreeRoot", "cloneIntoDestination"}, "update_repository_location": {"repositoryId", "previousMachineId", "machineId", "checkoutPath", "worktreeRoot"},
 	"get_home": {"contextId", "now"}, "search_items_command": {"query", "contextId"}, "list_inbox_items": {}, "create_item": {"title", "contextId", "projectId", "notes"}, "set_item_status": {"itemId", "status"}, "set_item_title": {"itemId", "title"}, "set_item_notes": {"itemId", "notes"}, "add_item_reminder": {"itemId", "remindAt"}, "remove_item_reminder": {"itemId", "reminderId"}, "set_item_relation": {"fromItemId", "toItemId", "kind"},
 }
 

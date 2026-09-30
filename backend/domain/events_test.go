@@ -59,6 +59,66 @@ func TestDecideUpdatesContextAttentionDefaultAndProjectDefaults(t *testing.T) {
 	}
 }
 
+func TestDecideRegistersAndUpdatesRepositoryAndMachineLocation(t *testing.T) {
+	state := DomainState{
+		NextRepositoryID: 4,
+		Projects:         []Project{{ID: 2, ContextID: 1}},
+		Machines:         []Machine{{ID: 3, ContextID: 1}},
+	}
+	registered, err := Decide(state, Event{Kind: "register_repository_at_location", ProjectID: 2, Name: " app ", RemoteURL: " git@example.com:team/app.git ", BaseBranch: " trunk ", MachineID: 3, CheckoutPath: "/src/app", WorktreeRoot: "/src/worktrees"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := registered.State.Repositories[0]; got.ID != 4 || got.Name != "app" || got.BaseBranch != "trunk" {
+		t.Fatalf("Repository = %#v", got)
+	}
+	if got := registered.State.RepositoryLocations[0]; got.RepositoryID != 4 || got.MachineID != 3 || got.CheckoutPath != "/src/app" {
+		t.Fatalf("Repository location = %#v", got)
+	}
+	if registered.State.NextRepositoryID != 5 || len(registered.Effects) != 1 || registered.Effects[0].Kind != "persist_repository_at_location" {
+		t.Fatalf("registration transition = %#v", registered)
+	}
+	updated, err := Decide(registered.State, Event{Kind: "update_repository_location", RepositoryID: 4, PreviousMachineID: int64Ptr(3), MachineID: 3, CheckoutPath: "/src/new-app", WorktreeRoot: "/src/new-worktrees"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.State.RepositoryLocations[0]; got.CheckoutPath != "/src/new-app" || got.WorktreeRoot != "/src/new-worktrees" {
+		t.Fatalf("updated location = %#v", got)
+	}
+}
+
+func TestDecideEnsuresProjectWorkspacesFromRepositoriesIdempotently(t *testing.T) {
+	state := DomainState{
+		NextWorkspaceID: 2,
+		Items:           []Item{{ID: 1, ProjectID: 7, HumanIdentifier: "MC-4"}},
+		Repositories:    []Repository{{ID: 2, ProjectID: 7, BaseBranch: "trunk"}},
+		Workspaces:      []Workspace{{ID: 1, ItemID: 1, PreparationState: WorkspaceReady, Repositories: []WorkspaceRepository{{RepositoryID: 2, Branch: "custom-branch", BaseBranch: "main"}}}},
+	}
+	decision, err := Decide(state, Event{Kind: "ensure_project_workspaces"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decision.State.Workspaces[0]; got.PreparationState != WorkspaceReady || len(got.Repositories) != 1 || got.Repositories[0] != (WorkspaceRepository{RepositoryID: 2, Branch: "custom-branch", BaseBranch: "trunk"}) {
+		t.Fatalf("reconciled Workspace = %#v", got)
+	}
+	if len(decision.Effects) != 1 || decision.Effects[0].Kind != "update_workspace_repositories" {
+		t.Fatalf("effects = %#v", decision.Effects)
+	}
+	created, err := Decide(DomainState{NextWorkspaceID: 4, Items: state.Items, Repositories: state.Repositories}, Event{Kind: "ensure_project_workspaces"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := created.State.Workspaces[0]; got.ID != 4 || got.PreparationState != WorkspacePending || got.Repositories[0].Branch != "mission-MC-4" || created.State.NextWorkspaceID != 5 {
+		t.Fatalf("new Workspace = %#v", created.State)
+	}
+	again, err := Decide(created.State, Event{Kind: "ensure_project_workspaces"})
+	if err != nil || len(again.Effects) != 0 {
+		t.Fatalf("second ensure effects = %#v, err=%v", again.Effects, err)
+	}
+}
+
+func int64Ptr(value int64) *int64 { return &value }
+
 func TestDecideCreatesAndUpdatesCompleteContextConfiguration(t *testing.T) {
 	initial := DomainState{NextContextID: 2, NextProjectID: 2, Contexts: []Context{{ID: 1, Name: "Personal"}}, Projects: []Project{{ID: 1, ContextID: 1, Name: "Default"}}}
 	configuration := NewContextConfiguration()
