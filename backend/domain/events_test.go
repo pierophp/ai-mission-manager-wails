@@ -165,3 +165,55 @@ func TestDecideRejectsInvalidProjectDefaults(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestDecideCreatesAndEditsItemsWithLocalMinuteRemindersAndRelations(t *testing.T) {
+	state := DomainState{NextItemID: 7, NextItemNumber: 13, NextReminderID: 3,
+		Contexts: []Context{{ID: 1}}, Projects: []Project{{ID: 2, ContextID: 1, Name: "Default", Defaults: ProjectDefaults{ItemStatus: StatusWaiting, ExecutionMode: ExecutionDirect}}},
+		Items: []Item{{ID: 1, HumanIdentifier: "MC-12", ProjectID: 2, Status: StatusInbox, Reminders: []Reminder{}}}}
+	created, err := Decide(state, Event{Kind: "create_item", Name: " New work ", ContextID: 1, ProjectID: 2, Notes: " details "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := created.State.Items[1]
+	if item.ID != 7 || item.HumanIdentifier != "MC-13" || item.Title != "New work" || item.Notes != " details " || item.Status != StatusWaiting || created.State.NextItemNumber != 14 {
+		t.Fatalf("created Item = %#v, state=%#v", item, created.State)
+	}
+	updated, err := Decide(created.State, Event{Kind: "set_item_status", ItemID: 7, Status: StatusActive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err = Decide(updated.State, Event{Kind: "set_item_title", ItemID: 7, Name: "  Revised  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err = Decide(updated.State, Event{Kind: "set_item_notes", ItemID: 7, Notes: " new notes "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err = Decide(updated.State, Event{Kind: "add_item_reminder", ItemID: 7, RemindAt: "2026-09-30T09:15"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.State.Items[1].Reminders[0] != (Reminder{ID: 3, RemindAt: "2026-09-30T09:15"}) {
+		t.Fatalf("reminders = %#v", updated.State.Items[1].Reminders)
+	}
+	relation, err := Decide(updated.State, Event{Kind: "set_item_relation", FromItemID: 1, ToItemID: 7, RelationKind: RelationBlocks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(relation.State.Relationships) != 1 || relation.State.Relationships[0] != (ItemRelation{FromItemID: 1, ToItemID: 7, Kind: RelationBlocks}) {
+		t.Fatalf("relationships = %#v", relation.State.Relationships)
+	}
+}
+
+func TestDecideRejectsInvalidItemChangesWithoutChangingSequences(t *testing.T) {
+	state := DomainState{NextItemID: 1, NextItemNumber: 1, NextReminderID: 1, Contexts: []Context{{ID: 1}}, Projects: []Project{{ID: 1, ContextID: 1, Name: "Default"}}}
+	for _, event := range []Event{{Kind: "create_item", Name: " ", ContextID: 1, ProjectID: 1}, {Kind: "add_item_reminder", ItemID: 44, RemindAt: "2026-09-30T09:15"}, {Kind: "set_item_relation", FromItemID: 1, ToItemID: 1, RelationKind: RelationBlocks}} {
+		if _, err := Decide(state, event); err == nil {
+			t.Errorf("Decide(%+v) succeeded", event)
+		}
+	}
+	if state.NextItemID != 1 || state.NextItemNumber != 1 || state.NextReminderID != 1 {
+		t.Fatalf("input mutated: %#v", state)
+	}
+}

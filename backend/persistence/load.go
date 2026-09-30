@@ -335,7 +335,16 @@ func loadRelationships(ctx context.Context, db *sql.DB) ([]domain.ItemRelation, 
 			return v, e
 		}
 		var e error
-		v.Kind, e = enum("item_relationships.kind", k, domain.ItemRelationKind("blocks"), domain.ItemRelationKind("blocked_by"), domain.ItemRelationKind("related_to"))
+		switch k {
+		case "blocks":
+			v.Kind = domain.RelationBlocks
+		case "blocked_by":
+			v.Kind = domain.RelationBlockedBy
+		case "related_to":
+			v.Kind = domain.RelationRelatedTo
+		default:
+			e = fmt.Errorf("unknown item_relationships.kind value %q", k)
+		}
 		return v, e
 	})
 }

@@ -56,6 +56,38 @@ var commandHandlers = map[string]commandHandler{
 		}
 		return s.Runtime.activityTab(), nil
 	}),
+	"get_home": withArgs([]string{"contextId", "now"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ContextID *int64 `json:"contextId"`
+			Now       string `json:"now"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.home(a.ContextID, a.Now), nil
+	}),
+	"search_items_command": withArgs([]string{"query", "contextId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			Query     string `json:"query"`
+			ContextID *int64 `json:"contextId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.searchItems(a.Query, a.ContextID), nil
+	}),
+	"list_inbox_items": noArgs(func(s *CommandService) (any, error) {
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.listInboxItems(), nil
+	}),
 	"create_context": withArgs([]string{"name"}, func(s *CommandService, raw json.RawMessage) (any, error) {
 		var a struct {
 			Name string `json:"name"`
@@ -167,6 +199,83 @@ var commandHandlers = map[string]commandHandler{
 		}
 		return s.Runtime.runEvent(domain.Event{Kind: "update_project", ProjectID: a.ProjectID, Name: a.Name, Defaults: domain.ProjectDefaults{ItemStatus: a.DefaultItemStatus, ExecutionMode: mode}})
 	}),
+	"create_item": withArgs([]string{"title", "contextId", "projectId", "notes"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			Title     string  `json:"title"`
+			ContextID int64   `json:"contextId"`
+			ProjectID int64   `json:"projectId"`
+			Notes     *string `json:"notes"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		notes := ""
+		if a.Notes != nil {
+			notes = *a.Notes
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "create_item", Name: a.Title, ContextID: a.ContextID, ProjectID: a.ProjectID, Notes: notes})
+	}),
+	"set_item_status": withArgs([]string{"itemId", "status"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID int64             `json:"itemId"`
+			Status domain.ItemStatus `json:"status"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "set_item_status", ItemID: a.ItemID, Status: a.Status})
+	}),
+	"set_item_title": withArgs([]string{"itemId", "title"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID int64  `json:"itemId"`
+			Title  string `json:"title"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "set_item_title", ItemID: a.ItemID, Name: a.Title})
+	}),
+	"set_item_notes": withArgs([]string{"itemId", "notes"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID int64  `json:"itemId"`
+			Notes  string `json:"notes"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "set_item_notes", ItemID: a.ItemID, Notes: a.Notes})
+	}),
+	"add_item_reminder": withArgs([]string{"itemId", "remindAt"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID   int64  `json:"itemId"`
+			RemindAt string `json:"remindAt"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "add_item_reminder", ItemID: a.ItemID, RemindAt: a.RemindAt})
+	}),
+	"remove_item_reminder": withArgs([]string{"itemId", "reminderId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID     int64 `json:"itemId"`
+			ReminderID int64 `json:"reminderId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "remove_item_reminder", ItemID: a.ItemID, ReminderID: a.ReminderID})
+	}),
+	"set_item_relation": withArgs([]string{"fromItemId", "toItemId", "kind"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			FromItemID int64                   `json:"fromItemId"`
+			ToItemID   int64                   `json:"toItemId"`
+			Kind       domain.ItemRelationKind `json:"kind"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "set_item_relation", FromItemID: a.FromItemID, ToItemID: a.ToItemID, RelationKind: a.Kind})
+	}),
 }
 
 var registeredCommandArguments = map[string][]string{
@@ -174,6 +283,7 @@ var registeredCommandArguments = map[string][]string{
 	"create_context": {"name"}, "create_context_configuration": {"configuration"}, "update_context": {"contextId", "name"}, "update_context_configuration": {"contextId", "configuration"},
 	"set_context_grill_defaults": {"contextId", "defaults"}, "set_context_implement_defaults": {"contextId", "defaults"}, "set_context_dirty_checkout_check": {"contextId", "enabled"},
 	"set_context_attention_default": {"contextId", "objectKind", "policy"}, "create_project": {"name", "contextId", "defaultItemStatus", "executionMode"}, "update_project": {"projectId", "name", "defaultItemStatus", "executionMode"},
+	"get_home": {"contextId", "now"}, "search_items_command": {"query", "contextId"}, "list_inbox_items": {}, "create_item": {"title", "contextId", "projectId", "notes"}, "set_item_status": {"itemId", "status"}, "set_item_title": {"itemId", "title"}, "set_item_notes": {"itemId", "notes"}, "add_item_reminder": {"itemId", "remindAt"}, "remove_item_reminder": {"itemId", "reminderId"}, "set_item_relation": {"fromItemId", "toItemId", "kind"},
 }
 
 func (s *CommandService) Invoke(command string, argsJSON string) (json.RawMessage, error) {

@@ -16,6 +16,15 @@ type Event struct {
 	Policy             ExternalChangePolicy
 	GrillConfiguration GrillConfiguration
 	Enabled            bool
+	ItemID             int64
+	Title              string
+	Notes              string
+	Status             ItemStatus
+	RemindAt           string
+	ReminderID         int64
+	FromItemID         int64
+	ToItemID           int64
+	RelationKind       ItemRelationKind
 }
 
 type ContextConfiguration struct {
@@ -42,6 +51,8 @@ type Effect struct {
 	Kind              EffectKind
 	Context           *Context
 	Project           *Project
+	Item              *Item
+	Relation          *ItemRelation
 	AttentionDefaults []ContextAttentionDefault
 }
 

@@ -102,6 +102,74 @@ func TestInvokeListsNoContextsAsEmptyArray(t *testing.T) {
 	}
 }
 
+func TestItemsCommandsPersistAndHomeGoldenJSON(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "mission-manager.sqlite")
+	runtime, err := OpenRuntime(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	service := CommandService{Runtime: runtime}
+	created, err := service.Invoke("create_item", `{"title":"Inbox task","contextId":1,"projectId":1,"notes":null}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const itemGolden = `{"id":1,"human_identifier":"MC-1","title":"Inbox task","project_id":1,"status":"Inbox","notes":"","reminders":[]}`
+	if string(created) != itemGolden {
+		t.Fatalf("create_item JSON = %s, want %s", created, itemGolden)
+	}
+	const itemViewGolden = `{"item":{"id":1,"human_identifier":"MC-1","title":"Inbox task","project_id":1,"status":"Inbox","notes":"","reminders":[]},"context_id":1,"context_name":"Personal","project_name":"Default","relationships":[],"workspaces":[],"worktrees":[],"runs":[],"run_projections":[],"run_signals":{"grillWaiting":false,"runActive":false},"implementation_queues":[],"links":[]}`
+	got, err := service.Invoke("get_home", `{"contextId":null,"now":"2026-09-30T09:15"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const homeGolden = `{"needs_attention":[` + itemViewGolden + `],"attention_entries":[],"running":[],"waiting":[],"due":[],"completed":[]}`
+	if string(got) != homeGolden {
+		t.Fatalf("get_home JSON mismatch\n got: %s\nwant: %s", got, homeGolden)
+	}
+	search, err := service.Invoke("search_items_command", `{"query":" inbox ","contextId":1}`)
+	if err != nil || string(search) != `[`+itemViewGolden+`]` {
+		t.Fatalf("search_items_command = %s, %v", search, err)
+	}
+	if _, err := service.Invoke("set_item_status", `{"itemId":1,"status":"Active"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Invoke("set_item_title", `{"itemId":1,"title":"Updated title"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Invoke("set_item_notes", `{"itemId":1,"notes":"updated notes"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Invoke("add_item_reminder", `{"itemId":1,"remindAt":"2026-09-30T09:15"}`); err != nil {
+		t.Fatal(err)
+	}
+	inbox, err := service.Invoke("list_inbox_items", `{}`)
+	if err != nil || string(inbox) != `[]` {
+		t.Fatalf("list_inbox_items = %s, %v", inbox, err)
+	}
+	removal, err := service.Invoke("remove_item_reminder", `{"itemId":1,"reminderId":1}`)
+	if err != nil || !strings.Contains(string(removal), `"reminders":[]`) {
+		t.Fatalf("remove reminder = %s, %v", removal, err)
+	}
+	second, err := service.Invoke("create_item", `{"title":"Second","contextId":1,"projectId":1,"notes":null}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second
+	if _, err := service.Invoke("set_item_relation", `{"fromItemId":2,"toItemId":1,"kind":"Blocks"}`); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenRuntime(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	var state = reopened.home(nil, "2026-09-30T09:15")
+	if len(state.Running) != 1 || state.Running[0].Item.Title != "Updated title" || state.Running[0].Item.Notes != "updated notes" || len(state.Running[0].Relationships) != 1 {
+		t.Fatalf("reopened home state = %#v", state)
+	}
+}
+
 func TestBindingsCommandsAreRegisteredOrPendingWithExactArgumentKeys(t *testing.T) {
 	bindings, err := os.ReadFile(filepath.Join("..", "frontend", "src", "runtime", "bindings.ts"))
 	if err != nil {

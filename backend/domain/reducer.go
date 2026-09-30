@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -269,6 +270,115 @@ func Decide(input DomainState, event Event) (Decision, error) {
 		}
 		state.Projects[idx] = p
 		return Decision{State: state, Effects: []Effect{{Kind: "update_project", Project: &p}}}, nil
+	case "create_item":
+		title := strings.TrimSpace(event.Name)
+		if title == "" {
+			return Decision{}, DomainError("an Item title cannot be blank")
+		}
+		if !hasContext(state, event.ContextID) {
+			return Decision{}, DomainError("Context " + itoa(event.ContextID) + " does not exist")
+		}
+		var project *Project
+		for i := range state.Projects {
+			if state.Projects[i].ID == event.ProjectID {
+				project = &state.Projects[i]
+				break
+			}
+		}
+		if project == nil {
+			return Decision{}, DomainError("Project " + itoa(event.ProjectID) + " does not exist")
+		}
+		if project.ContextID != event.ContextID {
+			return Decision{}, DomainError(fmt.Sprintf("Project %d belongs to another Context", event.ProjectID))
+		}
+		if state.NextItemID < 1 || state.NextItemID == math.MaxInt64 || state.NextItemNumber < 1 || state.NextItemNumber == math.MaxInt64 {
+			return Decision{}, DomainError("the Item identifier sequence is exhausted")
+		}
+		item := Item{ID: state.NextItemID, HumanIdentifier: fmt.Sprintf("MC-%d", state.NextItemNumber), Title: title, ProjectID: event.ProjectID, Status: project.Defaults.ItemStatus, Notes: event.Notes, Reminders: []Reminder{}}
+		state.NextItemID++
+		state.NextItemNumber++
+		state.Items = append(append([]Item(nil), state.Items...), item)
+		return Decision{State: state, Effects: []Effect{{Kind: "persist_item", Item: &item}}}, nil
+	case "set_item_status", "set_item_title", "set_item_notes", "add_item_reminder", "remove_item_reminder":
+		idx := -1
+		for i := range state.Items {
+			if state.Items[i].ID == event.ItemID {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return Decision{}, DomainError("Item " + itoa(event.ItemID) + " does not exist")
+		}
+		items := append([]Item(nil), state.Items...)
+		item := items[idx]
+		switch event.Kind {
+		case "set_item_status":
+			if event.Status != StatusInbox && event.Status != StatusActive && event.Status != StatusWaiting && event.Status != StatusDone {
+				return Decision{}, DomainError(fmt.Sprintf("unknown ItemStatus variant %q; expected Inbox, Active, Waiting, or Done", event.Status))
+			}
+			item.Status = event.Status
+		case "set_item_title":
+			item.Title = strings.TrimSpace(event.Name)
+			if item.Title == "" {
+				return Decision{}, DomainError("an Item title cannot be blank")
+			}
+		case "set_item_notes":
+			item.Notes = event.Notes
+		case "add_item_reminder":
+			remindAt := strings.TrimSpace(event.RemindAt)
+			if remindAt == "" {
+				return Decision{}, DomainError("a Reminder date cannot be blank")
+			}
+			if state.NextReminderID < 1 || state.NextReminderID == math.MaxInt64 {
+				return Decision{}, DomainError("the Item identifier sequence is exhausted")
+			}
+			item.Reminders = append(append([]Reminder(nil), item.Reminders...), Reminder{ID: state.NextReminderID, RemindAt: remindAt})
+			state.NextReminderID++
+		case "remove_item_reminder":
+			reminders := make([]Reminder, 0, len(item.Reminders))
+			found := false
+			for _, reminder := range item.Reminders {
+				if reminder.ID == event.ReminderID {
+					found = true
+				} else {
+					reminders = append(reminders, reminder)
+				}
+			}
+			if !found {
+				return Decision{}, DomainError(fmt.Sprintf("Reminder %d does not exist on Item %d", event.ReminderID, event.ItemID))
+			}
+			item.Reminders = reminders
+		}
+		items[idx] = item
+		state.Items = items
+		return Decision{State: state, Effects: []Effect{{Kind: EffectKind(event.Kind), Item: &item}}}, nil
+	case "set_item_relation":
+		if event.FromItemID == event.ToItemID {
+			return Decision{}, DomainError(fmt.Sprintf("an Item cannot relate to itself: %d", event.FromItemID))
+		}
+		fromContext, fromOK := contextForItem(state, event.FromItemID)
+		toContext, toOK := contextForItem(state, event.ToItemID)
+		if !fromOK {
+			return Decision{}, DomainError("Item " + itoa(event.FromItemID) + " does not exist")
+		}
+		if !toOK {
+			return Decision{}, DomainError("Item " + itoa(event.ToItemID) + " does not exist")
+		}
+		if fromContext != toContext {
+			return Decision{}, DomainError(fmt.Sprintf("Items %d and %d belong to different Contexts", event.FromItemID, event.ToItemID))
+		}
+		if event.RelationKind != RelationBlocks && event.RelationKind != RelationBlockedBy && event.RelationKind != RelationRelatedTo {
+			return Decision{}, DomainError(fmt.Sprintf("unknown ItemRelationKind variant %q", event.RelationKind))
+		}
+		relation := ItemRelation{FromItemID: event.FromItemID, ToItemID: event.ToItemID, Kind: event.RelationKind}
+		for _, existing := range state.Relationships {
+			if existing == relation {
+				return Decision{}, DomainError("the relationship already exists")
+			}
+		}
+		state.Relationships = append(append([]ItemRelation(nil), state.Relationships...), relation)
+		return Decision{State: state, Effects: []Effect{{Kind: "persist_item_relation", Relation: &relation}}}, nil
 	case "set_context_attention_default":
 		if !hasContext(state, event.ContextID) {
 			return Decision{}, DomainError("Context " + itoa(event.ContextID) + " does not exist")
@@ -291,6 +401,21 @@ func Decide(input DomainState, event Event) (Decision, error) {
 	default:
 		return Decision{}, DomainError("unsupported domain event: " + string(event.Kind))
 	}
+}
+
+func contextForItem(s DomainState, itemID int64) (int64, bool) {
+	for _, item := range s.Items {
+		if item.ID != itemID {
+			continue
+		}
+		for _, project := range s.Projects {
+			if project.ID == item.ProjectID {
+				return project.ContextID, true
+			}
+		}
+		return 0, false
+	}
+	return 0, false
 }
 
 func filterDefaults(values []ContextAttentionDefault, id int64) []ContextAttentionDefault {

@@ -22,30 +22,39 @@ type LinkPurpose string
 type ExternalChangeKind string
 type GrillContinuationAction string
 type ImplementationQueuePauseReasonKind string
+type AttentionEntryKind string
 
 const (
-	AgentClaude        AgentKind                 = "claude"
-	AgentCodex         AgentKind                 = "codex"
-	WorkflowMattPocock Workflow                  = "matt-pocock"
-	WorkflowPstack     Workflow                  = "pstack"
-	StatusInbox        ItemStatus                = "Inbox"
-	StatusActive       ItemStatus                = "Active"
-	StatusWaiting      ItemStatus                = "Waiting"
-	StatusDone         ItemStatus                = "Done"
-	ExecutionDirect    ExecutionMode             = "direct"
-	ExecutionWorktree  ExecutionMode             = "worktree"
-	WorkspacePending   WorkspacePreparationState = "pending"
-	WorkspaceResumable WorkspacePreparationState = "resumable"
-	WorkspaceReady     WorkspacePreparationState = "ready"
-	RunUnknown         RunState                  = "unknown"
-	RunWorking         RunState                  = "working"
-	RunBlocked         RunState                  = "blocked"
-	RunFinished        RunState                  = "finished"
-	PaneUnknown        RunPaneStatus             = "unknown"
-	PaneAvailable      RunPaneStatus             = "available"
-	PaneMissing        RunPaneStatus             = "missing"
-	TransportLocal     MachineTransportKind      = "local"
-	TransportSSH       MachineTransportKind      = "ssh"
+	AgentClaude                  AgentKind                 = "claude"
+	AgentCodex                   AgentKind                 = "codex"
+	WorkflowMattPocock           Workflow                  = "matt-pocock"
+	WorkflowPstack               Workflow                  = "pstack"
+	StatusInbox                  ItemStatus                = "Inbox"
+	StatusActive                 ItemStatus                = "Active"
+	StatusWaiting                ItemStatus                = "Waiting"
+	StatusDone                   ItemStatus                = "Done"
+	ExecutionDirect              ExecutionMode             = "direct"
+	ExecutionWorktree            ExecutionMode             = "worktree"
+	WorkspacePending             WorkspacePreparationState = "pending"
+	WorkspaceResumable           WorkspacePreparationState = "resumable"
+	WorkspaceReady               WorkspacePreparationState = "ready"
+	RunUnknown                   RunState                  = "unknown"
+	RunWorking                   RunState                  = "working"
+	RunBlocked                   RunState                  = "blocked"
+	RunFinished                  RunState                  = "finished"
+	RelationBlocks               ItemRelationKind          = "Blocks"
+	RelationBlockedBy            ItemRelationKind          = "BlockedBy"
+	RelationRelatedTo            ItemRelationKind          = "RelatedTo"
+	AttentionExternalChange      AttentionEntryKind        = "external_change"
+	AttentionReview              AttentionEntryKind        = "review"
+	AttentionReminder            AttentionEntryKind        = "reminder"
+	AttentionBlockedRun          AttentionEntryKind        = "blocked_run"
+	AttentionImplementationQueue AttentionEntryKind        = "ImplementationQueue"
+	PaneUnknown                  RunPaneStatus             = "unknown"
+	PaneAvailable                RunPaneStatus             = "available"
+	PaneMissing                  RunPaneStatus             = "missing"
+	TransportLocal               MachineTransportKind      = "local"
+	TransportSSH                 MachineTransportKind      = "ssh"
 )
 
 type GrillConfiguration struct {
@@ -112,9 +121,9 @@ type RepositoryLocation struct {
 	WorktreeRoot string `json:"worktree_root"`
 }
 type WorkspaceRepository struct {
-	RepositoryID int64  `json:"repository_id"`
+	RepositoryID int64  `json:"repositoryId"`
 	Branch       string `json:"branch"`
-	BaseBranch   string `json:"base_branch"`
+	BaseBranch   string `json:"baseBranch"`
 }
 type Workspace struct {
 	ID               int64                     `json:"id"`
@@ -345,6 +354,67 @@ type Activity struct {
 	ExternalObjectID int64            `json:"external_object_id"`
 	ObservedAt       int64            `json:"observed_at"`
 	Changes          []ExternalChange `json:"changes"`
+}
+type AttentionEntry struct {
+	Kind             AttentionEntryKind `json:"kind"`
+	LinkID           int64              `json:"link_id"`
+	ReminderID       *int64             `json:"reminder_id"`
+	RunID            *int64             `json:"run_id"`
+	QueueID          *int64             `json:"queue_id"`
+	ItemID           int64              `json:"item_id"`
+	ExternalObjectID int64              `json:"external_object_id"`
+	SourceTitle      string             `json:"source_title"`
+	SourceURL        string             `json:"source_url"`
+	Activities       []Activity         `json:"activities"`
+	Summary          string             `json:"summary"`
+}
+type ExternalLinkView struct {
+	Link                         Link                 `json:"link"`
+	Object                       ExternalObject       `json:"object"`
+	Snapshot                     *ExternalSnapshot    `json:"snapshot"`
+	AttentionPolicy              ExternalChangePolicy `json:"attention_policy"`
+	AttentionEntry               *AttentionEntry      `json:"attention_entry"`
+	SupportsImplementationSpec   bool                 `json:"supports_implementation_spec"`
+	SupportsImplementationTicket bool                 `json:"supports_implementation_ticket"`
+}
+type ItemRunSignals struct {
+	GrillWaiting bool `json:"grillWaiting"`
+	RunActive    bool `json:"runActive"`
+}
+type RunContinuations struct {
+	GoPlan       bool                      `json:"goPlan"`
+	GrillActions []GrillContinuationAction `json:"grillActions"`
+	Stop         bool                      `json:"stop"`
+	Finish       bool                      `json:"finish"`
+	Delete       bool                      `json:"delete"`
+}
+type RunProjection struct {
+	RunID         int64            `json:"runId"`
+	Status        string           `json:"status"`
+	Phase         string           `json:"phase"`
+	Continuations RunContinuations `json:"continuations"`
+}
+type ItemView struct {
+	Item                 Item                  `json:"item"`
+	ContextID            int64                 `json:"context_id"`
+	ContextName          string                `json:"context_name"`
+	ProjectName          string                `json:"project_name"`
+	Relationships        []ItemRelation        `json:"relationships"`
+	Workspaces           []Workspace           `json:"workspaces"`
+	Worktrees            []Worktree            `json:"worktrees"`
+	Runs                 []Run                 `json:"runs"`
+	RunProjections       []RunProjection       `json:"run_projections"`
+	RunSignals           ItemRunSignals        `json:"run_signals"`
+	ImplementationQueues []ImplementationQueue `json:"implementation_queues"`
+	Links                []ExternalLinkView    `json:"links"`
+}
+type HomeView struct {
+	NeedsAttention   []ItemView       `json:"needs_attention"`
+	AttentionEntries []AttentionEntry `json:"attention_entries"`
+	Running          []ItemView       `json:"running"`
+	Waiting          []ItemView       `json:"waiting"`
+	Due              []ItemView       `json:"due"`
+	Completed        []ItemView       `json:"completed"`
 }
 type ContextAttentionDefault struct {
 	ContextID  int64                `json:"context_id"`

@@ -101,7 +101,15 @@ func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persis
 				audit = append(audit, attentionAuditJSON(d))
 			}
 		default:
-			return nil, nil, fmt.Errorf("unsupported persistence effect %q", effect.Kind)
+			itemEffects, itemAudit, handled, itemErr := itemPersistenceEffects(effect)
+			if itemErr != nil {
+				return nil, nil, itemErr
+			}
+			if !handled {
+				return nil, nil, fmt.Errorf("unsupported persistence effect %q", effect.Kind)
+			}
+			out = append(out, itemEffects...)
+			audit = append(audit, itemAudit...)
 		}
 	}
 	return out, audit, nil
@@ -168,7 +176,7 @@ func (r *Runtime) runEvent(event domain.Event) (any, error) {
 			}
 		}
 	}
-	return nil, fmt.Errorf("command produced no result")
+	return itemEventResult(decision, event)
 }
 
 func (r *Runtime) listProjects() []domain.Project {
