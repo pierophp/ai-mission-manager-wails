@@ -44,6 +44,115 @@ var commandHandlers = map[string]commandHandler{
 		v := s.Runtime.listProjects()
 		return v, nil
 	}),
+	"list_machines": noArgs(func(s *CommandService) (any, error) {
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.listMachines(), nil
+	}),
+	"list_cli_configuration_profiles": noArgs(func(s *CommandService) (any, error) {
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.listCLIConfigurationProfiles(), nil
+	}),
+	"register_machine": withArgs([]string{"contextId", "name", "socketName", "transport"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ContextID  int64                   `json:"contextId"`
+			Name       string                  `json:"name"`
+			SocketName string                  `json:"socketName"`
+			Transport  domain.MachineTransport `json:"transport"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.registerMachine(a.ContextID, a.Name, a.SocketName, a.Transport)
+	}),
+	"update_machine": withArgs([]string{"machineId", "name", "socketName", "transport"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			MachineID  int64                   `json:"machineId"`
+			Name       string                  `json:"name"`
+			SocketName string                  `json:"socketName"`
+			Transport  domain.MachineTransport `json:"transport"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.updateMachine(a.MachineID, a.Name, a.SocketName, a.Transport)
+	}),
+	"check_machine": withArgs([]string{"machineId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			MachineID int64 `json:"machineId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.checkMachine(a.MachineID)
+	}),
+	"set_context_execution_machine": withArgs([]string{"contextId", "machineId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ContextID int64  `json:"contextId"`
+			MachineID *int64 `json:"machineId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.setContextExecutionMachine(a.ContextID, a.MachineID)
+	}),
+	"create_cli_configuration_profile": withArgs([]string{"machineId", "provider", "name", "appManaged", "existingDirectory"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			MachineID         int64            `json:"machineId"`
+			Provider          domain.AgentKind `json:"provider"`
+			Name              string           `json:"name"`
+			AppManaged        bool             `json:"appManaged"`
+			ExistingDirectory *string          `json:"existingDirectory"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.createCLIConfigurationProfile(a.MachineID, a.Provider, a.Name, a.AppManaged, a.ExistingDirectory)
+	}),
+	"delete_cli_configuration_profile": withArgs([]string{"profileId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ProfileID int64 `json:"profileId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return nil, s.Runtime.deleteCLIConfigurationProfile(a.ProfileID)
+	}),
+	"set_context_cli_configuration_profile": withArgs([]string{"contextId", "provider", "profileId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ContextID int64            `json:"contextId"`
+			Provider  domain.AgentKind `json:"provider"`
+			ProfileID *int64           `json:"profileId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.setContextCLIConfigurationProfile(a.ContextID, a.Provider, a.ProfileID)
+	}),
 	"list_audit_history": noArgs(func(s *CommandService) (any, error) {
 		if !writable(s) {
 			return nil, errors.New("runtime is not configured")

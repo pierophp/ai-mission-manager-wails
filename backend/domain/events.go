@@ -8,6 +8,18 @@ type EffectKind string
 type Event struct {
 	Kind               EventKind
 	ContextID          int64
+	MachineID          int64
+	ProfileID          int64
+	ExecutionMachineID *int64
+	CLIProfileID       *int64
+	Provider           AgentKind
+	ProfileName        string
+	ProfileDirectory   string
+	AppManaged         bool
+	SocketName         string
+	Transport          MachineTransport
+	MachineObservation MachineObservation
+	ObservedAt         int64
 	ProjectID          int64
 	Name               string
 	Configuration      ContextConfiguration
@@ -51,6 +63,8 @@ type Effect struct {
 	Kind              EffectKind
 	Context           *Context
 	Project           *Project
+	Machine           *Machine
+	CLIProfile        *CLIConfigurationProfile
 	Item              *Item
 	Relation          *ItemRelation
 	AttentionDefaults []ContextAttentionDefault

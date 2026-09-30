@@ -15,6 +15,10 @@ func (r *Runtime) transition(event domain.Event) (domain.Decision, error) {
 	}
 	r.transitionMu.Lock()
 	defer r.transitionMu.Unlock()
+	return r.transitionLocked(event)
+}
+
+func (r *Runtime) transitionLocked(event domain.Event) (domain.Decision, error) {
 	r.mu.Lock()
 	snapshot := r.state
 	r.mu.Unlock()
@@ -22,18 +26,25 @@ func (r *Runtime) transition(event domain.Event) (domain.Decision, error) {
 	if err != nil {
 		return domain.Decision{}, err
 	}
+	if err := r.persistDecisionLocked(snapshot, &decision); err != nil {
+		return domain.Decision{}, err
+	}
+	return decision, nil
+}
+
+func (r *Runtime) persistDecisionLocked(snapshot domain.DomainState, decision *domain.Decision) error {
 	effects, audit, err := persistenceEffects(decision.Effects)
 	if err != nil {
-		return domain.Decision{}, err
+		return err
 	}
 	r.mu.Lock()
 	if !sameSequences(r.state, snapshot) {
 		r.mu.Unlock()
-		return domain.Decision{}, errors.New("Mission Manager state changed; retry the command")
+		return errors.New("Mission Manager state changed; retry the command")
 	}
 	r.mu.Unlock()
 	if err := r.store.Apply(effects, audit); err != nil {
-		return domain.Decision{}, err
+		return err
 	}
 	auditEntries, auditErr := r.store.ListAuditHistory()
 	if auditErr == nil {
@@ -42,7 +53,7 @@ func (r *Runtime) transition(event domain.Event) (domain.Decision, error) {
 	r.mu.Lock()
 	r.state = decision.State
 	r.mu.Unlock()
-	return decision, nil
+	return nil
 }
 
 func sameSequences(a, b domain.DomainState) bool {
@@ -68,6 +79,40 @@ func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persis
 			}
 			out = append(out, persistence.Effect{SQL: `INSERT INTO projects(id,context_id,name,default_item_status,default_execution_mode) VALUES(?,?,?,?,?)`, Args: []any{p.ID, p.ContextID, p.Name, p.Defaults.ItemStatus, p.Defaults.ExecutionMode}, InsertedSequence: "next_project_id", InsertedID: p.ID})
 			audit = append(audit, auditJSON("projectCreated", "project_id", p.ID))
+		case "persist_machine", "update_machine":
+			m := effect.Machine
+			if m == nil {
+				return nil, nil, errors.New("machine effect has no Machine")
+			}
+			transport, err := json.Marshal(m.Transport)
+			if err != nil {
+				return nil, nil, err
+			}
+			if effect.Kind == "persist_machine" {
+				out = append(out, persistence.Effect{SQL: `INSERT INTO machines(id,context_id,name,socket_name,transport_json,last_observed,last_observed_at) VALUES(?,?,?,?,?,?,?)`, Args: []any{m.ID, m.ContextID, m.Name, m.SocketName, string(transport), m.LastObserved, m.LastObservedAt}, InsertedSequence: "next_machine_id", InsertedID: m.ID})
+				audit = append(audit, auditJSON("machineRegistered", "machine_id", m.ID))
+			} else {
+				out = append(out, persistence.Effect{SQL: `UPDATE machines SET name=?,socket_name=?,transport_json=? WHERE id=?`, Args: []any{m.Name, m.SocketName, string(transport), m.ID}})
+			}
+		case "observe_machine":
+			m := effect.Machine
+			if m == nil || m.LastObservedAt == nil {
+				return nil, nil, errors.New("Machine observation effect is incomplete")
+			}
+			out = append(out, persistence.Effect{SQL: `UPDATE machines SET last_observed=?,last_observed_at=? WHERE id=?`, Args: []any{m.LastObserved, *m.LastObservedAt, m.ID}})
+			audit = append(audit, machineObservationAuditJSON(m))
+		case "persist_cli_configuration_profile":
+			p := effect.CLIProfile
+			if p == nil {
+				return nil, nil, errors.New("CLI profile effect has no profile")
+			}
+			out = append(out, persistence.Effect{SQL: `INSERT INTO cli_configuration_profiles(id,machine_id,provider,name,directory,app_managed) VALUES(?,?,?,?,?,?)`, Args: []any{p.ID, p.MachineID, p.Provider, p.Name, p.Directory, boolInt64(p.AppManaged)}, InsertedSequence: "next_cli_profile_id", InsertedID: p.ID})
+		case "delete_cli_configuration_profile":
+			p := effect.CLIProfile
+			if p == nil {
+				return nil, nil, errors.New("CLI profile effect has no profile")
+			}
+			out = append(out, persistence.Effect{SQL: `DELETE FROM cli_configuration_profiles WHERE id=?`, Args: []any{p.ID}})
 		case "update_context":
 			c := effect.Context
 			if c == nil {
@@ -142,6 +187,11 @@ func auditJSON(action, key string, id int64) persistence.AuditAction {
 	return persistence.AuditAction(raw)
 }
 
+func machineObservationAuditJSON(machine *domain.Machine) persistence.AuditAction {
+	raw, _ := json.Marshal(map[string]any{"action": "machineObserved", "machine_id": machine.ID, "observation": machine.LastObserved})
+	return persistence.AuditAction(raw)
+}
+
 func attentionAuditJSON(defaultValue domain.ContextAttentionDefault) persistence.AuditAction {
 	raw, _ := json.Marshal(map[string]any{"action": "contextAttentionDefaultChanged", "context_id": defaultValue.ContextID, "object_kind": defaultValue.ObjectKind})
 	return persistence.AuditAction(raw)
@@ -175,6 +225,24 @@ func (r *Runtime) runEvent(event domain.Event) (any, error) {
 				return d, nil
 			}
 		}
+	case "set_context_execution_machine", "set_context_cli_configuration_profile":
+		for _, c := range decision.State.Contexts {
+			if c.ID == event.ContextID {
+				return projectContext(c), nil
+			}
+		}
+	case "register_machine", "update_machine":
+		for _, m := range decision.State.Machines {
+			if m.ID == decision.State.NextMachineID-1 || m.ID == event.MachineID {
+				return m, nil
+			}
+		}
+	case "create_cli_configuration_profile":
+		if len(decision.State.CLIConfigurationProfiles) > 0 {
+			return cliProfileSettingsView(decision.State.CLIConfigurationProfiles[len(decision.State.CLIConfigurationProfiles)-1]), nil
+		}
+	case "delete_cli_configuration_profile":
+		return nil, nil
 	}
 	return itemEventResult(decision, event)
 }

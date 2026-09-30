@@ -19,16 +19,21 @@ type ContextReader interface {
 // adapters. The first tracer operation reads Contexts from its persistence
 // seam; later operations extend this shared runtime.
 type Runtime struct {
-	contexts     ContextReader
-	mu           sync.Mutex
-	transitionMu sync.Mutex
-	state        domain.DomainState
-	store        *persistence.Store
-	events       EventEmitter
+	contexts                ContextReader
+	mu                      sync.Mutex
+	transitionMu            sync.Mutex
+	state                   domain.DomainState
+	store                   *persistence.Store
+	events                  EventEmitter
+	machineAccess           MachineAccess
+	machineChecker          MachineCheckFunc
+	machineReadiness        map[int64]MachineReadiness
+	machineCheckGenerations map[int64]uint64
 }
 
 func NewRuntime(contexts ContextReader) *Runtime {
-	return &Runtime{contexts: contexts, events: discardEventEmitter{}}
+	access := LocalSSHMachineAccess{}
+	return newRuntime(contexts, nil, domain.DomainState{}, access)
 }
 
 // OpenRuntime opens a writable application Runtime backed by the shared store.
@@ -42,7 +47,8 @@ func OpenRuntime(path string) (*Runtime, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	return &Runtime{store: store, state: state, events: discardEventEmitter{}}, nil
+	access := LocalSSHMachineAccess{}
+	return newRuntime(nil, store, state, access), nil
 }
 
 func OpenDefaultRuntime() (*Runtime, error) {
@@ -55,7 +61,31 @@ func OpenDefaultRuntime() (*Runtime, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	return &Runtime{store: store, state: state, events: discardEventEmitter{}}, nil
+	access := LocalSSHMachineAccess{}
+	return newRuntime(nil, store, state, access), nil
+}
+
+func newRuntime(contexts ContextReader, store *persistence.Store, state domain.DomainState, access MachineAccess) *Runtime {
+	tmux := TmuxTerminalRuntime{Access: access}
+	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}}
+}
+
+// SetMachineAdapters replaces the local adapters, primarily for dispatcher
+// tests that must not depend on SSH, tmux, or the host's installed tools.
+func (r *Runtime) SetMachineAdapters(access MachineAccess, check MachineCheckFunc) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if access != nil {
+		r.machineAccess = access
+		tmux := TmuxTerminalRuntime{Access: access}
+		r.machineChecker = tmux.CheckMachine
+	}
+	if check != nil {
+		r.machineChecker = check
+	}
 }
 
 func (r *Runtime) SetEventEmitter(emitter EventEmitter) {

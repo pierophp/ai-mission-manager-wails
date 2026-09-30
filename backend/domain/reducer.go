@@ -208,6 +208,157 @@ func Decide(input DomainState, event Event) (Decision, error) {
 		}
 		state.Contexts[idx] = c
 		return Decision{State: state, Effects: []Effect{{Kind: EffectKind(event.Kind), Context: &c}}}, nil
+	case "set_context_execution_machine":
+		idx := contextIndex(state, event.ContextID)
+		if idx < 0 {
+			return Decision{}, DomainError("Context " + itoa(event.ContextID) + " does not exist")
+		}
+		if event.ExecutionMachineID != nil && !hasMachine(state, *event.ExecutionMachineID) {
+			return Decision{}, DomainError(fmt.Sprintf("Machine %d does not exist", *event.ExecutionMachineID))
+		}
+		if !sameOptionalInt64(state.Contexts[idx].ExecutionMachineID, event.ExecutionMachineID) && len(activeContextRunIDs(state, event.ContextID)) > 0 {
+			return Decision{}, DomainError(fmt.Sprintf("Context %d has active Runs: %v", event.ContextID, activeContextRunIDs(state, event.ContextID)))
+		}
+		c := state.Contexts[idx]
+		c.ExecutionMachineID = event.ExecutionMachineID
+		if c.ClaudeProfileID != nil {
+			if err := validateContextProfile(state, c.ExecutionMachineID, AgentClaude, *c.ClaudeProfileID); err != nil {
+				return Decision{}, err
+			}
+		}
+		if c.CodexProfileID != nil {
+			if err := validateContextProfile(state, c.ExecutionMachineID, AgentCodex, *c.CodexProfileID); err != nil {
+				return Decision{}, err
+			}
+		}
+		state.Contexts[idx] = c
+		return Decision{State: state, Effects: []Effect{{Kind: "update_context", Context: &c}}}, nil
+	case "set_context_cli_configuration_profile":
+		idx := contextIndex(state, event.ContextID)
+		if idx < 0 {
+			return Decision{}, DomainError("Context " + itoa(event.ContextID) + " does not exist")
+		}
+		if event.CLIProfileID != nil {
+			if err := validateContextProfile(state, state.Contexts[idx].ExecutionMachineID, event.Provider, *event.CLIProfileID); err != nil {
+				return Decision{}, err
+			}
+		}
+		c := state.Contexts[idx]
+		if event.Provider == AgentClaude {
+			c.ClaudeProfileID = event.CLIProfileID
+		} else if event.Provider == AgentCodex {
+			c.CodexProfileID = event.CLIProfileID
+		} else {
+			return Decision{}, DomainError(fmt.Sprintf("unknown AgentKind variant %q", event.Provider))
+		}
+		state.Contexts[idx] = c
+		return Decision{State: state, Effects: []Effect{{Kind: "update_context", Context: &c}}}, nil
+	case "register_machine", "update_machine":
+		name, socket := clean(event.Name), clean(event.SocketName)
+		if name == "" {
+			return Decision{}, DomainError("a Machine name cannot be blank")
+		}
+		if socket == "" {
+			return Decision{}, DomainError("a Machine socket name cannot be blank")
+		}
+		if err := validateMachineTransport(event.Transport); err != nil {
+			return Decision{}, err
+		}
+		if event.Kind == "register_machine" {
+			if !hasContext(state, event.ContextID) {
+				return Decision{}, DomainError("Context " + itoa(event.ContextID) + " does not exist")
+			}
+			for _, m := range state.Machines {
+				if m.ContextID == event.ContextID && m.Name == name {
+					return Decision{}, DomainError("Machine name already exists in Context " + itoa(event.ContextID) + ": " + name)
+				}
+			}
+			if state.NextMachineID < 1 || state.NextMachineID == 1<<63-1 {
+				return Decision{}, DomainError("Machine identifier sequence is exhausted")
+			}
+			m := Machine{ID: state.NextMachineID, ContextID: event.ContextID, Name: name, SocketName: socket, Transport: event.Transport, LastObserved: MachineObservation("unknown")}
+			state.NextMachineID++
+			state.Machines = append(state.Machines, m)
+			return Decision{State: state, Effects: []Effect{{Kind: "persist_machine", Machine: &m}}}, nil
+		}
+		idx := -1
+		for i, m := range state.Machines {
+			if m.ID == event.MachineID {
+				idx = i
+			}
+		}
+		if idx < 0 {
+			return Decision{}, DomainError(fmt.Sprintf("Machine %d does not exist", event.MachineID))
+		}
+		m := state.Machines[idx]
+		for _, other := range state.Machines {
+			if other.ID != m.ID && other.ContextID == m.ContextID && other.Name == name {
+				return Decision{}, DomainError("Machine name already exists in Context " + itoa(m.ContextID) + ": " + name)
+			}
+		}
+		m.Name = name
+		m.SocketName = socket
+		m.Transport = event.Transport
+		state.Machines[idx] = m
+		return Decision{State: state, Effects: []Effect{{Kind: "update_machine", Machine: &m}}}, nil
+	case "observe_machine":
+		if event.MachineObservation != "available" && event.MachineObservation != "offline" {
+			return Decision{}, DomainError(fmt.Sprintf("unknown Machine observation %q", event.MachineObservation))
+		}
+		for i, machine := range state.Machines {
+			if machine.ID == event.MachineID {
+				machine.LastObserved = event.MachineObservation
+				observedAt := event.ObservedAt
+				machine.LastObservedAt = &observedAt
+				state.Machines[i] = machine
+				return Decision{State: state, Effects: []Effect{{Kind: "observe_machine", Machine: &machine}}}, nil
+			}
+		}
+		return Decision{}, DomainError(fmt.Sprintf("Machine %d does not exist", event.MachineID))
+	case "create_cli_configuration_profile":
+		name, directory := clean(event.ProfileName), clean(event.ProfileDirectory)
+		if name == "" {
+			return Decision{}, DomainError("a CLI configuration profile name cannot be blank")
+		}
+		if directory == "" {
+			return Decision{}, DomainError("a CLI configuration profile directory cannot be blank")
+		}
+		if event.Provider != AgentClaude && event.Provider != AgentCodex {
+			return Decision{}, DomainError(fmt.Sprintf("unknown AgentKind variant %q", event.Provider))
+		}
+		if !hasMachine(state, event.MachineID) {
+			return Decision{}, DomainError(fmt.Sprintf("Machine %d does not exist", event.MachineID))
+		}
+		for _, p := range state.CLIConfigurationProfiles {
+			if p.MachineID == event.MachineID && p.Provider == event.Provider && p.Name == name {
+				return Decision{}, DomainError("CLI configuration profile already exists: " + name)
+			}
+		}
+		if state.NextCLIProfileID < 1 || state.NextCLIProfileID == 1<<63-1 {
+			return Decision{}, DomainError("CLI profile identifier sequence is exhausted")
+		}
+		p := CLIConfigurationProfile{ID: state.NextCLIProfileID, MachineID: event.MachineID, Provider: event.Provider, Name: name, Directory: directory, AppManaged: event.AppManaged}
+		state.NextCLIProfileID++
+		state.CLIConfigurationProfiles = append(state.CLIConfigurationProfiles, p)
+		return Decision{State: state, Effects: []Effect{{Kind: "persist_cli_configuration_profile", CLIProfile: &p}}}, nil
+	case "delete_cli_configuration_profile":
+		idx := -1
+		for i, p := range state.CLIConfigurationProfiles {
+			if p.ID == event.ProfileID {
+				idx = i
+			}
+		}
+		if idx < 0 {
+			return Decision{}, DomainError(fmt.Sprintf("CLI configuration profile %d does not exist", event.ProfileID))
+		}
+		for _, c := range state.Contexts {
+			if c.ClaudeProfileID != nil && *c.ClaudeProfileID == event.ProfileID || c.CodexProfileID != nil && *c.CodexProfileID == event.ProfileID {
+				return Decision{}, DomainError("CLI configuration profile is in use by a Context")
+			}
+		}
+		p := state.CLIConfigurationProfiles[idx]
+		state.CLIConfigurationProfiles = append(state.CLIConfigurationProfiles[:idx], state.CLIConfigurationProfiles[idx+1:]...)
+		return Decision{State: state, Effects: []Effect{{Kind: "delete_cli_configuration_profile", CLIProfile: &p}}}, nil
 	case "create_project":
 		name := clean(event.Name)
 		if name == "" {
@@ -444,6 +595,41 @@ func hasMachine(s DomainState, id int64) bool {
 		}
 	}
 	return false
+}
+
+func contextIndex(state DomainState, id int64) int {
+	for i, context := range state.Contexts {
+		if context.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func sameOptionalInt64(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func validateMachineTransport(transport MachineTransport) error {
+	switch transport.Kind {
+	case TransportLocal:
+		if transport.Host != nil || transport.User != nil || transport.Port != nil || transport.IdentityFile != nil || transport.KnownHostsFile != nil || transport.StrictHostKeyChecking != nil {
+			return DomainError("local Machine transport cannot include SSH settings")
+		}
+	case TransportSSH:
+		if transport.Host == nil || strings.TrimSpace(*transport.Host) == "" {
+			return DomainError("SSH host cannot be blank")
+		}
+		if transport.Port != nil && *transport.Port == 0 {
+			return DomainError("SSH port must be positive")
+		}
+	default:
+		return DomainError(fmt.Sprintf("unknown MachineTransport kind %q", transport.Kind))
+	}
+	return nil
 }
 func activeContextRunIDs(s DomainState, contextID int64) []int64 {
 	var ids []int64

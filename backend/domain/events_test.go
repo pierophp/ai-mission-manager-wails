@@ -158,6 +158,76 @@ func TestDecideValidatesConfiguredMachineAndCLIProfile(t *testing.T) {
 	}
 }
 
+func TestDecideManagesMachinesAndMachineOwnedProviderProfiles(t *testing.T) {
+	host := "build.example.com"
+	state := DomainState{NextMachineID: 1, NextCLIProfileID: 1, Contexts: []Context{{ID: 1, Name: "Personal"}, {ID: 2, Name: "Shared"}}}
+	transport := MachineTransport{Kind: TransportSSH, Host: &host}
+	registered, err := Decide(state, Event{Kind: "register_machine", ContextID: 1, Name: "Build", SocketName: "mission", Transport: transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	machine := registered.State.Machines[0]
+	if machine.ID != 1 || machine.LastObserved != "unknown" || registered.State.NextMachineID != 2 {
+		t.Fatalf("Machine = %#v", machine)
+	}
+	if _, err := Decide(registered.State, Event{Kind: "register_machine", ContextID: 1, Name: " Build ", SocketName: "other", Transport: transport}); err == nil {
+		t.Fatal("expected duplicate Machine name to fail")
+	}
+	profile, err := Decide(registered.State, Event{Kind: "create_cli_configuration_profile", MachineID: 1, Provider: AgentClaude, ProfileName: "Personal", ProfileDirectory: "~/profiles/claude/1", AppManaged: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileID := profile.State.CLIConfigurationProfiles[0].ID
+	selectedMachine := int64(1)
+	selected, err := Decide(profile.State, Event{Kind: "set_context_execution_machine", ContextID: 2, ExecutionMachineID: &selectedMachine})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err = Decide(selected.State, Event{Kind: "set_context_cli_configuration_profile", ContextID: 2, Provider: AgentClaude, CLIProfileID: &profileID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.State.Contexts[1].ClaudeProfileID == nil || *selected.State.Contexts[1].ClaudeProfileID != profileID {
+		t.Fatalf("Context profile = %#v", selected.State.Contexts[1])
+	}
+	if _, err := Decide(selected.State, Event{Kind: "delete_cli_configuration_profile", ProfileID: profileID}); err == nil {
+		t.Fatal("expected selected profile deletion to fail")
+	}
+	otherMachine := int64(42)
+	if _, err := Decide(selected.State, Event{Kind: "set_context_execution_machine", ContextID: 2, ExecutionMachineID: &otherMachine}); err == nil {
+		t.Fatal("expected profile ownership to block Machine change")
+	}
+}
+
+func TestDecideRecordsMachineObservationAsAnEffect(t *testing.T) {
+	initial := DomainState{Machines: []Machine{{ID: 7, Name: "Runner", LastObserved: "unknown"}}}
+	decision, err := Decide(initial, Event{Kind: "observe_machine", MachineID: 7, MachineObservation: "available", ObservedAt: 123})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Machines[0].LastObserved != "unknown" || initial.Machines[0].LastObservedAt != nil {
+		t.Fatalf("Decide mutated original Machine: %#v", initial.Machines[0])
+	}
+	got := decision.State.Machines[0]
+	if got.LastObserved != "available" || got.LastObservedAt == nil || *got.LastObservedAt != 123 {
+		t.Fatalf("observed Machine = %#v", got)
+	}
+	if len(decision.Effects) != 1 || decision.Effects[0].Kind != "observe_machine" || decision.Effects[0].Machine == nil {
+		t.Fatalf("observation effects = %#v", decision.Effects)
+	}
+	if _, err := Decide(decision.State, Event{Kind: "observe_machine", MachineID: 7, MachineObservation: "unknown"}); err == nil {
+		t.Fatal("expected invalid observation to fail")
+	}
+}
+
+func TestDecideDoesNotBlockSelectingTheSameMachineDuringActiveRun(t *testing.T) {
+	current, next := int64(1), int64(1)
+	state := DomainState{Contexts: []Context{{ID: 1, ExecutionMachineID: &current}}, Projects: []Project{{ID: 1, ContextID: 1}}, Items: []Item{{ID: 1, ProjectID: 1}}, Machines: []Machine{{ID: 1}}, Runs: []Run{{ID: 2, ItemID: 1, State: RunWorking}}}
+	if _, err := Decide(state, Event{Kind: "set_context_execution_machine", ContextID: 1, ExecutionMachineID: &next}); err != nil {
+		t.Fatalf("same Machine selection should be allowed: %v", err)
+	}
+}
+
 func TestDecideRejectsInvalidProjectDefaults(t *testing.T) {
 	state := DomainState{NextProjectID: 2, Contexts: []Context{{ID: 1, Name: "Personal"}}}
 	_, err := Decide(state, Event{Kind: "create_project", ContextID: 1, Name: "Research", Defaults: ProjectDefaults{ItemStatus: ItemStatus("Started"), ExecutionMode: ExecutionWorktree}})
