@@ -2,43 +2,26 @@ package main
 
 import (
 	"embed"
-
 	"log"
-	"time"
+	"os"
 
+	"github.com/piero/ai-mission-manager-wails/backend"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
-
-// Wails uses Go's `embed` package to embed the frontend files into the binary.
-// Any files in the frontend/dist folder will be embedded into the binary and
-// made available to the frontend.
-// See https://pkg.go.dev/embed for more information.
 
 //go:embed all:frontend/dist
 var assets embed.FS
 
-func init() {
-	// Register a custom event whose associated data type is string.
-	// This is not required, but the binding generator will pick up registered events
-	// and provide a strongly typed JS/TS API for them.
-	application.RegisterEvent[string]("time")
-}
-
-// main function serves as the application's entry point. It initializes the application, creates a window,
-// and starts a goroutine that emits a time-based event every second. It subsequently runs the application and
-// logs any error that might occur.
 func main() {
-
-	// Create a new Wails application by providing the necessary options.
-	// Variables 'Name' and 'Description' are for application metadata.
-	// 'Assets' configures the asset server with the 'FS' variable pointing to the frontend files.
-	// 'Bind' is a list of Go struct instances. The frontend has access to the methods of these instances.
-	// 'Mac' options tailor the application when running an macOS.
+	runtime := backend.NewRuntime(backend.SQLiteContextReader{})
+	commands := &backend.CommandService{Runtime: runtime}
+	platform := &backend.PlatformService{}
 	app := application.New(application.Options{
 		Name:        "AI Mission Manager",
 		Description: "Desktop mission manager",
 		Services: []application.Service{
-			application.NewService(&GreetService{}),
+			application.NewService(commands),
+			application.NewService(platform),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -46,42 +29,56 @@ func main() {
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "com.piero.aimissionmanager",
+		},
 	})
 
-	// Create a new window with the necessary options.
-	// 'Title' is the title of the window.
-	// 'Mac' options tailor the window when running on macOS.
-	// 'BackgroundColour' is the background colour of the window.
-	// 'URL' is the URL that will be loaded into the webview.
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title: "AI Mission Manager",
-		// Window sized to the golden ratio (1000 / 618 ≈ 1.618).
-		Width:  1000,
-		Height: 618,
-		Mac: application.MacWindow{
-			InvisibleTitleBarHeight: 50,
-			Backdrop:                application.MacBackdropTranslucent,
-			TitleBar:                application.MacTitleBarHiddenInset,
-		},
-		BackgroundColour: application.NewRGB(6, 7, 15),
+	platform.OpenURLFunc = app.Browser.OpenURL
+	platform.RevealItemFunc = func(path string) error {
+		return app.Env.OpenFileManager(path, true)
+	}
+	platform.OpenDirectoryFunc = func(options backend.OpenDirectoryOptions) (any, error) {
+		dialog := app.Dialog.OpenFileWithOptions(&application.OpenFileDialogOptions{
+			CanChooseDirectories:    true,
+			CanChooseFiles:          false,
+			AllowsMultipleSelection: options.Multiple,
+			Title:                   options.Title,
+		})
+		if options.Multiple {
+			paths, err := dialog.PromptForMultipleSelection()
+			if err != nil {
+				return nil, err
+			}
+			if len(paths) == 0 {
+				return nil, nil
+			}
+			return paths, nil
+		}
+		path, err := dialog.PromptForSingleSelection()
+		if err != nil {
+			return nil, err
+		}
+		if path == "" {
+			return nil, nil
+		}
+		return path, nil
+	}
+
+	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:            "AI Mission Manager",
+		Width:            920,
+		Height:           720,
+		MinWidth:         680,
+		MinHeight:        520,
+		BackgroundColour: application.NewRGB(247, 244, 238),
 		URL:              "/",
 	})
+	if app.Env.Info().Debug && os.Getenv("AI_MISSION_MANAGER_OPEN_DEVTOOLS") == "true" {
+		window.OpenDevTools()
+	}
 
-	// Create a goroutine that emits an event containing the current time every second.
-	// The frontend can listen to this event and update the UI accordingly.
-	go func() {
-		for {
-			now := time.Now().Format(time.RFC1123)
-			app.Event.Emit("time", now)
-			time.Sleep(time.Second)
-		}
-	}()
-
-	// Run the application. This blocks until the application has been exited.
-	err := app.Run()
-
-	// If an error occurred while running the application, log it and exit.
-	if err != nil {
+	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
 }
