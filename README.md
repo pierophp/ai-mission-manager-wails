@@ -24,3 +24,9 @@ wails3 build
 ```
 
 O frontend fica em `frontend/`, o backend Go começa em `main.go` e as configurações de build ficam em `build/`.
+
+## Banco de dados e migração do Tauri
+
+O Wails usa o mesmo banco do app Tauri em `~/.ai-mission-manager/mission-manager.sqlite`. Execute apenas uma instância do Mission Manager por vez: nunca deixe os apps Tauri e Wails abertos simultaneamente sobre esse banco. O app Wails permite apenas uma instância aberta por vez.
+
+Se o banco ainda precisar de uma migração de schema, abra-o pelo app Tauri primeiro e feche o Tauri antes de iniciar o Wails. O Wails recusa schemas legados que não reconhece; ele não executa as migrações antigas do Tauri.
