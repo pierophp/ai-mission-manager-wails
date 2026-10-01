@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/piero/ai-mission-manager-wails/backend/domain"
@@ -113,7 +114,20 @@ func (r *Runtime) openTerminal(runID int64, terminalID, sessionName, paneID stri
 				r.EmitEvent("terminal-output", TerminalOutputEvent{terminalID, generation, paneID, byteList(data)})
 			}
 		},
-		func(string) {},
+		func(value string) {
+			if !r.isCurrentTerminalGeneration(terminalID, generation) {
+				return
+			}
+			record, err := parseAgentStateRecord(value)
+			if err != nil {
+				return
+			}
+			runID, err := strconv.ParseInt(record.RunID, 10, 64)
+			if err != nil || runID != run.ID {
+				return
+			}
+			_, _, _ = r.applyAgentStateRecord(runID, record)
+		},
 		func(code *int) {
 			if r.isCurrentTerminalGeneration(terminalID, generation) {
 				r.EmitEvent("terminal-exit", TerminalExitEvent{TerminalID: terminalID, Generation: generation, PaneID: paneID, Code: code})

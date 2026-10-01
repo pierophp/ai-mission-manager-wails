@@ -16,6 +16,91 @@ type CommandService struct{ Runtime *Runtime }
 type commandHandler func(*CommandService, json.RawMessage) (json.RawMessage, error)
 
 var commandHandlers = map[string]commandHandler{
+	"reconcile_runs": noArgs(func(s *CommandService) (any, error) {
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.reconcileRuns()
+	}),
+	"stop_run": withArgs([]string{"runId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			RunID int64 `json:"runId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.stopRun(a.RunID)
+	}),
+	"finish_run": withArgs([]string{"runId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			RunID int64 `json:"runId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.finishRun(a.RunID)
+	}),
+	"delete_run": withArgs([]string{"runId", "confirmed"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			RunID     int64 `json:"runId"`
+			Confirmed bool  `json:"confirmed"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.deleteRun(a.RunID, a.Confirmed)
+	}),
+	"list_run_suggestions": noArgs(func(s *CommandService) (any, error) {
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.listRunSuggestions()
+	}),
+	"attach_run": withArgs([]string{"suggestion"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			Suggestion RunSuggestion `json:"suggestion"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.attachRun(a.Suggestion)
+	}),
+	"stop_untracked_agent": withArgs([]string{"suggestion"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			Suggestion RunSuggestion `json:"suggestion"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return nil, s.Runtime.operateUntrackedAgent(a.Suggestion, false)
+	}),
+	"delete_untracked_agent": withArgs([]string{"suggestion"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			Suggestion RunSuggestion `json:"suggestion"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return nil, s.Runtime.operateUntrackedAgent(a.Suggestion, true)
+	}),
 	"list_grill_model_catalog": noArgs(func(s *CommandService) (any, error) {
 		if !writable(s) {
 			return nil, errors.New("runtime is not configured")
@@ -823,6 +908,7 @@ var commandHandlers = map[string]commandHandler{
 }
 
 var registeredCommandArguments = map[string][]string{
+	"reconcile_runs": {}, "stop_run": {"runId"}, "finish_run": {"runId"}, "delete_run": {"runId", "confirmed"}, "list_run_suggestions": {}, "attach_run": {"suggestion"}, "stop_untracked_agent": {"suggestion"}, "delete_untracked_agent": {"suggestion"},
 	"get_setup_state": {}, "complete_setup": {"contextName", "provider"}, "get_health_status": {"provider"},
 	"list_contexts": {}, "new_context_configuration": {}, "list_context_attention_defaults": {}, "list_projects": {}, "list_repositories": {}, "list_repository_locations": {}, "list_audit_history": {}, "get_activity_tab": {}, "list_grill_model_catalog": {}, "refresh_grill_model_catalog": {}, "list_plan_usage": {}, "refresh_plan_usage": {},
 	"create_context": {"name"}, "create_context_configuration": {"configuration"}, "update_context": {"contextId", "name"}, "update_context_configuration": {"contextId", "configuration"},

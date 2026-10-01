@@ -19,26 +19,28 @@ type ContextReader interface {
 // adapters. The first tracer operation reads Contexts from its persistence
 // seam; later operations extend this shared runtime.
 type Runtime struct {
-	contexts                ContextReader
-	mu                      sync.Mutex
-	terminalMu              sync.Mutex
-	terminalConnections     map[string]terminalSession
-	terminalGenerations     map[string]uint64
-	terminalOpen            terminalOpenFunc
-	transitionMu            sync.Mutex
-	state                   domain.DomainState
-	store                   *persistence.Store
-	events                  EventEmitter
-	machineAccess           MachineAccess
-	machineChecker          MachineCheckFunc
-	machineReadiness        map[int64]MachineReadiness
-	machineCheckGenerations map[int64]uint64
-	pendingWorktreeRemovals map[int64]pendingWorktreeRemoval
-	backgroundMu            sync.Mutex
-	planUsageRefreshing     bool
-	planUsageLastAttempt    int64
-	catalogRefreshing       bool
-	catalogLastAttempt      int64
+	contexts                    ContextReader
+	mu                          sync.Mutex
+	terminalMu                  sync.Mutex
+	terminalConnections         map[string]terminalSession
+	terminalGenerations         map[string]uint64
+	terminalOpen                terminalOpenFunc
+	runObservationGeneration    map[int64]uint64
+	runReconciliationInProgress bool
+	transitionMu                sync.Mutex
+	state                       domain.DomainState
+	store                       *persistence.Store
+	events                      EventEmitter
+	machineAccess               MachineAccess
+	machineChecker              MachineCheckFunc
+	machineReadiness            map[int64]MachineReadiness
+	machineCheckGenerations     map[int64]uint64
+	pendingWorktreeRemovals     map[int64]pendingWorktreeRemoval
+	backgroundMu                sync.Mutex
+	planUsageRefreshing         bool
+	planUsageLastAttempt        int64
+	catalogRefreshing           bool
+	catalogLastAttempt          int64
 }
 
 func NewRuntime(contexts ContextReader) *Runtime {
@@ -60,6 +62,10 @@ func OpenRuntime(path string) (*Runtime, error) {
 	access := LocalSSHMachineAccess{}
 	runtime := newRuntime(nil, store, state, access)
 	if err := runtime.recoverWorktreeRemovalIntents(); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
+	if err := runtime.recoverLegacyRunStates(); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
@@ -86,6 +92,10 @@ func OpenDefaultRuntime() (*Runtime, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
+	if err := runtime.recoverLegacyRunStates(); err != nil {
+		_ = runtime.Close()
+		return nil, err
+	}
 	if err := runtime.ensureProjectWorkspaces(); err != nil {
 		_ = runtime.Close()
 		return nil, err
@@ -95,7 +105,7 @@ func OpenDefaultRuntime() (*Runtime, error) {
 
 func newRuntime(contexts ContextReader, store *persistence.Store, state domain.DomainState, access MachineAccess) *Runtime {
 	tmux := TmuxTerminalRuntime{Access: access}
-	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}, pendingWorktreeRemovals: map[int64]pendingWorktreeRemoval{}, terminalConnections: map[string]terminalSession{}, terminalGenerations: map[string]uint64{}}
+	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}, pendingWorktreeRemovals: map[int64]pendingWorktreeRemoval{}, terminalConnections: map[string]terminalSession{}, terminalGenerations: map[string]uint64{}, runObservationGeneration: map[int64]uint64{}}
 }
 
 // SetMachineAdapters replaces the local adapters, primarily for dispatcher

@@ -38,7 +38,7 @@ func (f *fakeEmbeddedTerminal) close() error { f.closed = true; return nil }
 func TestTerminalCommandsOpenLiveRunAndPublishByteListEvents(t *testing.T) {
 	access := NewFakeMachineAccess()
 	machine := domain.Machine{ID: 4, Name: "Local", SocketName: "mission", Transport: domain.MachineTransport{Kind: domain.TransportLocal}}
-	run := domain.Run{ID: 23, MachineID: machine.ID, SessionName: "run-23", PaneID: "%17"}
+	run := domain.Run{ID: 23, MachineID: machine.ID, Agent: domain.AgentClaude, SessionName: "run-23", PaneID: "%17", State: domain.RunUnknown}
 	state := domain.DomainState{Machines: []domain.Machine{machine}, Runs: []domain.Run{run}}
 	access.ShellResults["tmux -f /dev/null -L 'mission' list-panes -t 'run-23' -F '#{pane_id}\t#{pane_index}\t#{pane_pid}\t#{pane_width}\t#{pane_height}\t#{pane_title}\t#{pane_current_command}\t#{pane_current_path}'"] = MachineAccessResult{Value: "%17\t0\t345\t90\t30\tAgent\tbash\t/tmp/work\n"}
 	runtime, err := OpenRuntime(filepath.Join(t.TempDir(), "terminal.sqlite"))
@@ -61,8 +61,10 @@ func TestTerminalCommandsOpenLiveRunAndPublishByteListEvents(t *testing.T) {
 		}{name, payload})
 	}))
 	var opened []*fakeEmbeddedTerminal
+	var stateSubscription func(string)
 	runtime.mu.Lock()
-	runtime.terminalOpen = func(_ domain.Machine, _, _ string, output func([]byte), _ func(string), exit func(*int)) (terminalConnection, error) {
+	runtime.terminalOpen = func(_ domain.Machine, _, _ string, output func([]byte), subscription func(string), exit func(*int)) (terminalConnection, error) {
+		stateSubscription = subscription
 		connection := &fakeEmbeddedTerminal{onOutput: output, onExit: exit, snapshotBytes: []byte("prompt\x1b[0m\x1b[1;1H")}
 		opened = append(opened, connection)
 		return connection, nil
@@ -93,6 +95,13 @@ func TestTerminalCommandsOpenLiveRunAndPublishByteListEvents(t *testing.T) {
 	}
 	if !reflect.DeepEqual(event.Data, []int{0, 255}) || event.Generation != 1 || event.PaneID != "%17" {
 		t.Fatalf("output event = %#v", event)
+	}
+	stateSubscription(`{"agent":"claude","runId":"23","state":"blocked","updatedAt":"123","sequence":1}`)
+	if got := runtime.runCopy(23); got.State != domain.RunBlocked || got.LastAppliedAgentStateSequence == nil || *got.LastAppliedAgentStateSequence != 1 {
+		t.Fatalf("live hook did not update Run state: %#v", got)
+	}
+	if len(emitted) != 2 || emitted[1].name != "run-state-changed" {
+		t.Fatalf("live hook events = %#v", emitted)
 	}
 	if _, err := service.Invoke("terminal_input", `{"terminalId":"t-23","input":[0,65,255]}`); err != nil {
 		t.Fatal(err)
