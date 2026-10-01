@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -167,6 +168,142 @@ func TestItemsCommandsPersistAndHomeGoldenJSON(t *testing.T) {
 	var state = reopened.home(nil, "2026-09-30T09:15")
 	if len(state.Running) != 1 || state.Running[0].Item.Title != "Updated title" || state.Running[0].Item.Notes != "updated notes" || len(state.Running[0].Relationships) != 1 {
 		t.Fatalf("reopened home state = %#v", state)
+	}
+}
+
+func TestSetupCommandsPersistSettingsInNewDatabase(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "mission-manager.sqlite")
+	runtime, err := OpenRuntime(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := CommandService{Runtime: runtime}
+
+	got, err := service.Invoke("get_setup_state", `{}`)
+	if err != nil || string(got) != `{"completed":false,"provider":"github"}` {
+		t.Fatalf("initial get_setup_state = %s, %v", got, err)
+	}
+	got, err = service.Invoke("complete_setup", `{"contextName":"  Personal  ","provider":"none"}`)
+	if err != nil || string(got) != `{"completed":true,"provider":"none"}` {
+		t.Fatalf("complete_setup = %s, %v", got, err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenRuntime(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopenedService := CommandService{Runtime: reopened}
+	got, err = reopenedService.Invoke("get_setup_state", `{}`)
+	if err != nil || string(got) != `{"completed":true,"provider":"none"}` {
+		t.Fatalf("persisted get_setup_state = %s, %v", got, err)
+	}
+	var setupCompleted, providerChoice string
+	if setupCompleted, err = reopened.store.Setting("setup_completed"); err != nil {
+		t.Fatal(err)
+	}
+	if providerChoice, err = reopened.store.Setting("provider_choice"); err != nil {
+		t.Fatal(err)
+	}
+	if setupCompleted != "true" || providerChoice != "none" {
+		t.Fatalf("settings = (%q, %q), want (true, none)", setupCompleted, providerChoice)
+	}
+}
+
+func TestHealthStatusDispatcherResolvesAndPersistsExecutables(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-based executable fixtures require Unix")
+	}
+	directory := t.TempDir()
+	writeExecutable(t, filepath.Join(directory, "tmux"), "#!/bin/sh\nprintf 'tmux 3.4\\n'\n")
+	writeExecutable(t, filepath.Join(directory, "gh"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then exit 0; fi\nprintf 'not logged in to github.com\\n' >&2\nexit 1\n")
+	writeExecutable(t, filepath.Join(directory, "claude"), "#!/bin/sh\nexit 0\n")
+	writeExecutable(t, filepath.Join(directory, "codex"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", directory)
+
+	databasePath := filepath.Join(t.TempDir(), "mission-manager.sqlite")
+	runtime, err := OpenRuntime(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	service := CommandService{Runtime: runtime}
+	if _, err := service.Invoke("complete_setup", `{"contextName":"Personal","provider":"github"}`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := service.Invoke("get_health_status", `{"provider":null}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var health struct {
+		Runtime struct {
+			State          string  `json:"state"`
+			ExecutablePath *string `json:"executablePath"`
+		} `json:"runtime"`
+		Provider struct {
+			State   string `json:"state"`
+			Message string `json:"message"`
+		} `json:"provider"`
+		Agents []struct {
+			Key            string  `json:"key"`
+			State          string  `json:"state"`
+			ExecutablePath *string `json:"executablePath"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(got, &health); err != nil {
+		t.Fatal(err)
+	}
+	if health.Runtime.State != "available" || health.Provider.State != "unauthenticated" || !strings.Contains(health.Provider.Message, "not logged in") {
+		t.Fatalf("health status = %s", got)
+	}
+	if len(health.Agents) != 2 || health.Agents[0].State != "available" || health.Agents[1].State != "available" {
+		t.Fatalf("agent health = %s", got)
+	}
+	for _, path := range []*string{health.Runtime.ExecutablePath, health.Agents[0].ExecutablePath, health.Agents[1].ExecutablePath} {
+		if path == nil || !filepath.IsAbs(*path) {
+			t.Fatalf("resolved path is not absolute: %#v", path)
+		}
+	}
+	for _, key := range []string{"tmux_executable_path", "gh_executable_path", "claude_executable_path", "codex_executable_path"} {
+		value, err := runtime.store.Setting(key)
+		if err != nil {
+			t.Fatalf("read %s: %v", key, err)
+		}
+		if !filepath.IsAbs(value) {
+			t.Fatalf("persisted %s is not absolute: %q", key, value)
+		}
+	}
+
+	// Once persisted, configured absolute paths work even without a useful PATH.
+	t.Setenv("PATH", "")
+	got, err = service.Invoke("get_health_status", `{"provider":"github"}`)
+	if err != nil || !strings.Contains(string(got), `"state":"unauthenticated"`) {
+		t.Fatalf("health status from saved paths = %s, %v", got, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(directory, "tmux"), []byte("#!/bin/sh\nprintf 'tmux is broken\\n' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err = service.Invoke("get_health_status", `{"provider":"none"}`)
+	if err != nil || !strings.Contains(string(got), `"state":"unavailable"`) || !strings.Contains(string(got), "tmux is broken") {
+		t.Fatalf("failed tmux check did not preserve stderr: %s, %v", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "gh"), []byte("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then exit 0; fi\nprintf 'network unavailable\\n' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err = service.Invoke("get_health_status", `{"provider":"github"}`)
+	if err != nil || !strings.Contains(string(got), `"state":"unavailable"`) || !strings.Contains(string(got), "network unavailable") {
+		t.Fatalf("non-authentication gh failure was not classified as unavailable: %s, %v", got, err)
+	}
+}
+
+func writeExecutable(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 

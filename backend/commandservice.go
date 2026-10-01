@@ -16,6 +16,37 @@ type CommandService struct{ Runtime *Runtime }
 type commandHandler func(*CommandService, json.RawMessage) (json.RawMessage, error)
 
 var commandHandlers = map[string]commandHandler{
+	"get_setup_state": noArgs(func(s *CommandService) (any, error) {
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.setupState()
+	}),
+	"complete_setup": withArgs([]string{"contextName", "provider"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ContextName string         `json:"contextName"`
+			Provider    ProviderChoice `json:"provider"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.completeSetup(a.ContextName, a.Provider)
+	}),
+	"get_health_status": withArgs([]string{"provider"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			Provider *ProviderChoice `json:"provider"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.healthStatus(a.Provider)
+	}),
 	"list_contexts": noArgs(func(s *CommandService) (any, error) {
 		if s.Runtime == nil {
 			return nil, errors.New("runtime is not configured")
@@ -464,6 +495,7 @@ var commandHandlers = map[string]commandHandler{
 }
 
 var registeredCommandArguments = map[string][]string{
+	"get_setup_state": {}, "complete_setup": {"contextName", "provider"}, "get_health_status": {"provider"},
 	"list_contexts": {}, "new_context_configuration": {}, "list_context_attention_defaults": {}, "list_projects": {}, "list_repositories": {}, "list_repository_locations": {}, "list_audit_history": {}, "get_activity_tab": {},
 	"create_context": {"name"}, "create_context_configuration": {"configuration"}, "update_context": {"contextId", "name"}, "update_context_configuration": {"contextId", "configuration"},
 	"set_context_grill_defaults": {"contextId", "defaults"}, "set_context_implement_defaults": {"contextId", "defaults"}, "set_context_dirty_checkout_check": {"contextId", "enabled"},
