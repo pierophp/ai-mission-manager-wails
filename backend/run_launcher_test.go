@@ -139,7 +139,7 @@ func TestStartRunPersistsBeforeGateAndCoversDirectAndWorktree(t *testing.T) {
 	if direct.SessionName != "mission-item-1-run-1" || direct.PaneID != "%7" || direct.State != domain.RunUnknown || len(fake.released) != 1 {
 		t.Fatalf("direct Run=%s released=%v", runRaw, fake.released)
 	}
-	request["strategy"] = map[string]any{"kind": "grill", "machineId": 1, "primaryRepositoryId": 1, "configuration": map[string]any{"agent": "claude", "model": "claude-sonnet-5", "effort": "high"}, "prompt": "Ask a focused decision question.", "expectedCheckouts": preview.Checkouts, "allowDirty": false, "allowSharedCheckouts": true}
+	request["strategy"] = map[string]any{"kind": "grill", "machine_id": 1, "primary_repository_id": 1, "configuration": map[string]any{"agent": "claude", "model": "claude-sonnet-5", "effort": "high"}, "language": "english", "prompt": "Ask a focused decision question.", "expected_checkouts": preview.Checkouts, "allow_dirty": false, "allow_shared_checkouts": true}
 	grillRaw := call("start_run", mustJSON(t, map[string]any{"request": request}))
 	var grill domain.Run
 	if err := json.Unmarshal(grillRaw, &grill); err != nil {

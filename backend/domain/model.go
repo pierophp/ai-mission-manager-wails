@@ -300,6 +300,7 @@ type Run struct {
 	PaneStatus                    RunPaneStatus                    `json:"pane_status"`
 	DirectCheckouts               []RunCheckout                    `json:"direct_checkouts"`
 	Transcript                    string                           `json:"transcript"`
+	DownstreamIssueCandidates     []DownstreamIssueCandidate       `json:"downstream_issue_candidates"`
 	ReportedPullRequests          []string                         `json:"reported_pull_requests"`
 	AttentionSummary              *string                          `json:"attention_summary"`
 	GrillQuestionGroup            *GrillQuestionGroup              `json:"grill_question_group"`

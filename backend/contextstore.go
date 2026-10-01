@@ -27,6 +27,8 @@ type Runtime struct {
 	terminalConnections         map[string]terminalSession
 	terminalGenerations         map[string]uint64
 	terminalOpen                terminalOpenFunc
+	grillOperations             map[int64]*sync.Mutex
+	grillTerminal               grillPaneTerminal
 	runObservationGeneration    map[int64]uint64
 	runReconciliationInProgress bool
 	transitionMu                sync.Mutex
@@ -107,7 +109,7 @@ func OpenDefaultRuntime() (*Runtime, error) {
 
 func newRuntime(contexts ContextReader, store *persistence.Store, state domain.DomainState, access MachineAccess) *Runtime {
 	tmux := TmuxTerminalRuntime{Access: access}
-	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}, pendingWorktreeRemovals: map[int64]pendingWorktreeRemoval{}, terminalConnections: map[string]terminalSession{}, terminalGenerations: map[string]uint64{}, runObservationGeneration: map[int64]uint64{}, runExecutor: tmuxAgentRunExecutor{access: access}}
+	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}, pendingWorktreeRemovals: map[int64]pendingWorktreeRemoval{}, terminalConnections: map[string]terminalSession{}, terminalGenerations: map[string]uint64{}, runObservationGeneration: map[int64]uint64{}, grillOperations: map[int64]*sync.Mutex{}, grillTerminal: tmuxGrillPaneTerminal{access: access}, runExecutor: tmuxAgentRunExecutor{access: access}}
 }
 
 func (r *Runtime) setRunExecutor(executor agentRunExecutor) {

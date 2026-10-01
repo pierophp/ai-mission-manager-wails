@@ -24,6 +24,33 @@ type terminalConnection interface {
 
 type terminalOpenFunc func(machine domain.Machine, sessionName, paneID string, onOutput func([]byte), onSubscription func(string), onExit func(*int)) (terminalConnection, error)
 
+type grillPaneTerminal interface {
+	SetBuffer(domain.Machine, string, string) error
+	PasteBuffer(domain.Machine, string, string) error
+	SendEnter(domain.Machine, string) error
+}
+
+type tmuxGrillPaneTerminal struct{ access MachineAccess }
+
+func (terminal tmuxGrillPaneTerminal) run(machine domain.Machine, command string) error {
+	access := terminal.access
+	if access == nil {
+		access = LocalSSHMachineAccess{}
+	}
+	_, err := access.RunShell(machine, "tmux -f /dev/null -L "+shellQuote(machine.SocketName)+" "+command)
+	return err
+}
+
+func (terminal tmuxGrillPaneTerminal) SetBuffer(machine domain.Machine, buffer, text string) error {
+	return terminal.run(machine, "set-buffer -b "+shellQuote(buffer)+" "+shellQuote(text))
+}
+func (terminal tmuxGrillPaneTerminal) PasteBuffer(machine domain.Machine, buffer, pane string) error {
+	return terminal.run(machine, "paste-buffer -r -p -d -b "+shellQuote(buffer)+" -t "+shellQuote(pane))
+}
+func (terminal tmuxGrillPaneTerminal) SendEnter(machine domain.Machine, pane string) error {
+	return terminal.run(machine, "send-keys -t "+shellQuote(pane)+" C-m")
+}
+
 type PaneSummary struct {
 	PaneID         string `json:"paneId"`
 	SessionName    string `json:"sessionName"`

@@ -82,4 +82,15 @@ func TestDoneItemWithAttentionEntryStillAppearsInNeedsAttention(t *testing.T) {
 	}
 }
 
+func TestCanonicalRunViewIncludesDetectedDownstreamReferences(t *testing.T) {
+	run := CanonicalRunForView(Run{
+		ID:               9,
+		ExecutionProfile: ExecutionProfileGrill,
+		Transcript:       "AI_MISSION_MANAGER_EVENT {\"event\":\"external.object.created\",\"url\":\"https://github.com/acme/app/issues/14\",\"run_id\":9,\"action\":\"to-tickets\"}",
+	})
+	if len(run.DownstreamIssueCandidates) != 1 || run.DownstreamIssueCandidates[0].URL != "https://github.com/acme/app/issues/14" {
+		t.Fatalf("projected downstream references = %#v", run.DownstreamIssueCandidates)
+	}
+}
+
 func stringPointer(value string) *string { return &value }

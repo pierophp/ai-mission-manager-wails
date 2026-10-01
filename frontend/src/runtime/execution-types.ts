@@ -82,6 +82,15 @@ export type GrillAnswer = {
   answer: string;
 };
 
+export type DownstreamIssueCandidate = {
+  url: string;
+  discovery: "structured-event" | "output-url";
+  ordinal?: number;
+  blockedBy?: string[];
+  runId?: number;
+  action?: GrillContinuationAction;
+};
+
 export type Run = {
   id: number;
   item_id: number;
@@ -110,6 +119,7 @@ export type Run = {
   pane_status: RunPaneStatus;
   direct_checkouts: RunCheckout[];
   transcript: string;
+  downstream_issue_candidates?: DownstreamIssueCandidate[];
   reported_pull_requests: string[];
   attention_summary: string | null;
   grill_question_group: GrillQuestionGroup | null;

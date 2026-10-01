@@ -12,9 +12,9 @@ import type {
 import type { Context, ItemView, Machine, Run, RunLaunchOptions } from "../../../runtime/types";
 import type { ExecutionProfile } from "../../../runtime/execution-types";
 
-const commandMock = vi.hoisted(() => ({ command: vi.fn() }));
+const commandMock = vi.hoisted(() => ({ command: vi.fn(), invokeRevealPlan: vi.fn() }));
 
-vi.mock("../../../runtime/command", () => ({ command: commandMock.command }));
+vi.mock("../../../runtime/command", () => ({ command: commandMock.command, invokeRevealPlan: commandMock.invokeRevealPlan }));
 
 const preview = {
   workspaceId: 1,
@@ -212,6 +212,7 @@ describe("RunsTab", () => {
         },
       ],
     };
+    commandMock.invokeRevealPlan.mockReset().mockResolvedValue(undefined);
     commandMock.command.mockReset().mockImplementation(async (name: string) => {
       if (name === "getRunLaunchOptions") return launchOptions;
       if (name === "prepareDirectRun") return preview;
@@ -447,6 +448,8 @@ describe("RunsTab", () => {
     expect(container.querySelector('[aria-label="Plan ready for Run #7"]')).not.toBeNull();
     expect(buttonNamed("docs/plan.md")?.title).toBe("/tmp/app/docs/plan.md");
     expect(buttonNamed("Go")).not.toBeNull();
+    await act(async () => buttonNamed("docs/plan.md")?.click());
+    expect(commandMock.invokeRevealPlan).toHaveBeenCalledWith(7);
 
     await renderRun(toUiRun(planRun), [{
       ...localMachine,
@@ -469,6 +472,47 @@ describe("RunsTab", () => {
 
     await renderRun({ ...toUiRun(planRun), plan_phase: "executing" });
     expect(buttonNamed("Go")).toBeUndefined();
+  });
+
+  it("shows detected downstream references from the Grill transcript", async () => {
+    const grillRun = toUiRun({
+      id: 43, item_id: 1, workspace_id: 1, repository_id: 1, worktree_id: null,
+      machine_id: 1, agent: "claude", cli_configuration_profile: null,
+      execution_profile: "grill", workflow: "matt-pocock", model: null, effort: null,
+      skill_snapshot: null, prompt: "Grill prompt", working_directory: "/tmp/app",
+      session_name: "grill-43", pane_id: "%43", started_at: 1, state: "finished",
+      pane_status: "available", direct_checkouts: [], transcript: "",
+      reported_pull_requests: [], attention_summary: null, grill_question_group: null,
+      grill_answers: [], grill_decisions: [], grill_response: null, grill_phase: "finished",
+      grill_action: "to-tickets", plan_phase: null, plan_path: null,
+    });
+    const runWithCandidate: Run = {
+      ...grillRun,
+      downstream_issue_candidates: [{
+        url: "https://github.com/acme/app/issues/14",
+        discovery: "structured-event",
+        runId: 43,
+        action: "to-tickets",
+      }],
+    };
+    await act(async () => {
+      root.render(createElement(RunsTab, {
+        view: {
+          ...view,
+          runs: [runWithCandidate],
+          run_projections: [{
+            runId: 43,
+            status: "finished",
+            phase: "grillAwaitingNextAction",
+            continuations: { goPlan: false, grillActions: ["to-spec"], stop: false, finish: true, delete: true },
+          }],
+        },
+        repositories: [], machines: [], grillModelCatalog: [], commands: itemCommands(),
+        intent: undefined, grillDrafts: {}, onGrillDraftsChange: vi.fn(), onOpenTerminal: vi.fn(),
+      }));
+    });
+    expect(container.textContent).toContain("Detected downstream references");
+    expect(container.querySelector('a[href="https://github.com/acme/app/issues/14"]')).not.toBeNull();
   });
 
   it("starts with the prompt edited in the preview", async () => {

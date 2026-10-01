@@ -319,6 +319,11 @@ func canonicalRunForView(run Run) Run {
 	if run.ReportedPullRequests == nil {
 		run.ReportedPullRequests = []string{}
 	}
+	if run.ExecutionProfile == ExecutionProfileGrill {
+		run.DownstreamIssueCandidates = DiscoverDownstreamIssueCandidates(run.Transcript)
+	} else {
+		run.DownstreamIssueCandidates = []DownstreamIssueCandidate{}
+	}
 	if run.GrillAnswers == nil {
 		run.GrillAnswers = []GrillAnswer{}
 	}
@@ -327,6 +332,8 @@ func canonicalRunForView(run Run) Run {
 	}
 	return run
 }
+
+func CanonicalRunForView(run Run) Run { return canonicalRunForView(run) }
 func itemRunSignals(runs []Run) ItemRunSignals {
 	signals := ItemRunSignals{}
 	for _, run := range runs {

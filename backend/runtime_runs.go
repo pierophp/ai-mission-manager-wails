@@ -396,7 +396,7 @@ func (r *Runtime) reconcileRuns() (RunReconciliationResult, error) {
 			}
 			result.Changed = result.Changed || (accepted && changed)
 		}
-		if pane != nil && run.Workflow == domain.WorkflowPstack {
+		if pane != nil && (run.Workflow == domain.WorkflowPstack || run.ExecutionProfile == domain.ExecutionProfileGrill) {
 			transcript, err := r.machineAccess.RunShell(machine, "tmux -f /dev/null -L "+shellQuote(machine.SocketName)+" capture-pane -p -J -S - -t "+shellQuote(run.PaneID))
 			if err == nil {
 				transcriptChanged, err := r.applyRunTranscript(run, transcript)
@@ -465,9 +465,41 @@ func (r *Runtime) applyRunTranscript(previous domain.Run, transcript string) (bo
 		return false, nil
 	}
 	previous = current
-	prs := append([]string(nil), previous.ReportedPullRequests...)
+	prs := append([]string{}, previous.ReportedPullRequests...)
 	attention := previous.AttentionSummary
 	planPath := previous.PlanPath
+	grillQuestionGroup := previous.GrillQuestionGroup
+	grillAnswers := append([]domain.GrillAnswer{}, previous.GrillAnswers...)
+	grillResponse := previous.GrillResponse
+	grillPhase := previous.GrillPhase
+	questionsChanged := false
+	if previous.ExecutionProfile == domain.ExecutionProfileGrill {
+		captured := grillQuestionGroupSinceRun(previous, transcript)
+		grillQuestionGroup = captured
+		if previous.GrillQuestionGroup != nil && captured == nil && (previous.State == domain.RunWorking || previous.GrillResponse == nil) {
+			grillQuestionGroup = previous.GrillQuestionGroup
+		}
+		if previous.GrillQuestionGroup != nil && captured != nil && previous.GrillResponse == nil && len(previous.GrillQuestionGroup.Questions) > 0 && len(captured.Questions) > 0 && captured.Questions[0].Number > previous.GrillQuestionGroup.Questions[len(previous.GrillQuestionGroup.Questions)-1].Number {
+			combined := *previous.GrillQuestionGroup
+			combined.Questions = append(append([]domain.GrillQuestion(nil), combined.Questions...), captured.Questions...)
+			grillQuestionGroup = &combined
+		}
+		if grillQuestionGroup != nil {
+			grillQuestionGroup.Round = uint(len(previous.GrillDecisions))
+		}
+		questionsChanged = !reflect.DeepEqual(previous.GrillQuestionGroup, grillQuestionGroup)
+		if questionsChanged {
+			grillAnswers = []domain.GrillAnswer{}
+			grillResponse = nil
+		}
+		if previous.State == domain.RunFinished && (grillPhase == nil || *grillPhase != "finished") {
+			phase := domain.GrillPhase("awaiting_next_action")
+			if grillQuestionGroup != nil && grillResponse == nil {
+				phase = "waiting_for_answers"
+			}
+			grillPhase = &phase
+		}
+	}
 	for _, line := range strings.Split(transcript, "\n") {
 		payload, ok := strings.CutPrefix(strings.TrimSpace(line), "AI_MISSION_MANAGER_EVENT ")
 		if !ok {
@@ -502,24 +534,55 @@ func (r *Runtime) applyRunTranscript(previous domain.Run, transcript string) (bo
 			}
 		}
 	}
-	if strings.Join(prs, "\n") == strings.Join(previous.ReportedPullRequests, "\n") && equalStringPointer(attention, previous.AttentionSummary) && equalStringPointer(planPath, previous.PlanPath) {
+	transcriptValue := previous.Transcript
+	if previous.ExecutionProfile == domain.ExecutionProfileGrill {
+		transcriptValue = transcript
+	}
+	if strings.Join(prs, "\n") == strings.Join(previous.ReportedPullRequests, "\n") && equalStringPointer(attention, previous.AttentionSummary) && equalStringPointer(planPath, previous.PlanPath) && transcriptValue == previous.Transcript && reflect.DeepEqual(grillQuestionGroup, previous.GrillQuestionGroup) && reflect.DeepEqual(grillAnswers, previous.GrillAnswers) && equalStringPointer(grillResponse, previous.GrillResponse) && equalGrillPhase(grillPhase, previous.GrillPhase) {
 		return false, nil
 	}
 	prsJSON, _ := json.Marshal(prs)
-	if err := r.store.Apply([]persistence.Effect{{SQL: `UPDATE runs SET reported_pull_requests_json=?,attention_summary=?,plan_path=? WHERE id=?`, Args: []any{string(prsJSON), attention, planPath, previous.ID}}}, nil); err != nil {
+	questionJSON, err := optionalGrillQuestionJSON(grillQuestionGroup)
+	if err != nil {
+		return false, err
+	}
+	answersJSON, _ := json.Marshal(grillAnswers)
+	if err := r.store.Apply([]persistence.Effect{{SQL: `UPDATE runs SET reported_pull_requests_json=?,attention_summary=?,plan_path=?,transcript=?,grill_question_group_json=?,grill_answers_json=?,grill_response=?,grill_phase=? WHERE id=?`, Args: []any{string(prsJSON), attention, planPath, transcriptValue, questionJSON, string(answersJSON), grillResponse, grillPhase, previous.ID}}}, nil); err != nil {
 		return false, err
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	for i := range r.state.Runs {
 		if r.state.Runs[i].ID == previous.ID {
 			r.state.Runs[i].ReportedPullRequests = prs
 			r.state.Runs[i].AttentionSummary = attention
 			r.state.Runs[i].PlanPath = planPath
+			r.state.Runs[i].Transcript = transcriptValue
+			r.state.Runs[i].GrillQuestionGroup = grillQuestionGroup
+			r.state.Runs[i].GrillAnswers = grillAnswers
+			r.state.Runs[i].GrillResponse = grillResponse
+			r.state.Runs[i].GrillPhase = grillPhase
 			break
 		}
 	}
+	r.mu.Unlock()
+	if questionsChanged {
+		r.EmitEvent("run-questions-changed", previous.ID)
+	}
 	return true, nil
+}
+
+func equalGrillPhase(a, b *domain.GrillPhase) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func grillQuestionGroupSinceRun(run domain.Run, transcript string) *domain.GrillQuestionGroup {
+	if len(run.GrillDecisions) == 0 && run.GrillResponse == nil {
+		return domain.ParseGrillQuestionGroup(transcript)
+	}
+	return domain.ParseGrillQuestionGroupSince(run.Transcript, transcript)
 }
 func validReportedValue(v string) bool {
 	v = strings.TrimSpace(v)

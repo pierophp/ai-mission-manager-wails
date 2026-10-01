@@ -20,11 +20,6 @@
   "delete_machine",
   "prepare_item_deletion",
   "delete_item",
-  "compose_grill_prompt",
-  "prepare_grill_run",
-  "submit_grill_answers",
-  "continue_grill",
-  "go_plan",
   "check_implementation_queue",
   "skip_implementation_queue_entry",
   "cancel_implementation_queue"

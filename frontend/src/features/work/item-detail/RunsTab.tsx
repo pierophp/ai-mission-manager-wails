@@ -9,7 +9,6 @@ import { cn } from "cn";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
 import { Spinner } from "../../../components/ui/spinner";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { errorMessage } from "../../../runtime/errors";
 import type { GrillContinuationAction } from "../../../runtime/execution-types";
 import type { PaneTab } from "../../../runtime/terminal-types";
@@ -369,6 +368,34 @@ export function RunsTab({
                   </pre>
                 </details>
               )}
+              {(run.downstream_issue_candidates?.length ?? 0) > 0 && (
+                <section className="rounded-md border bg-background/60 p-3">
+                  <strong className="block text-sm">Detected downstream references</strong>
+                  <ul className="mt-2 grid gap-1 text-xs">
+                    {run.downstream_issue_candidates?.map((candidate) => (
+                      <li key={`${candidate.discovery}:${candidate.url}`}>
+                        {candidate.url.startsWith("https://") ? (
+                          <a
+                            className="break-all text-primary underline"
+                            href={candidate.url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {candidate.url}
+                          </a>
+                        ) : (
+                          <code className="break-all">{candidate.url}</code>
+                        )}
+                        <span className="ml-2 text-muted-foreground">
+                          {candidate.discovery === "structured-event"
+                            ? "reported by the Run"
+                            : "found in the transcript"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
               {(run.pane_status === "missing" ||
                 projection.phase === "grillRecoverablePaneLoss") && (
                 <span className="text-xs text-destructive">
@@ -505,7 +532,7 @@ function PlanLink({ run, machine }: { run: Run; machine: Machine | undefined }) 
       className="break-all text-left text-primary underline"
       title={path}
       onClick={() =>
-        void revealItemInDir(path).catch((error: unknown) =>
+        void workActions.revealPlan(run.id)().catch((error: unknown) =>
           window.alert(errorMessage(error)),
         )
       }

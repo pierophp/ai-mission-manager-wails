@@ -4,6 +4,7 @@ import (
 	"embed"
 	"log"
 	"os"
+	"os/exec"
 
 	"github.com/piero/ai-mission-manager-wails/backend"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -18,8 +19,8 @@ func main() {
 		log.Fatal(err)
 	}
 	defer runtime.Close()
-	commands := &backend.CommandService{Runtime: runtime}
 	platform := &backend.PlatformService{}
+	commands := &backend.CommandService{Runtime: runtime, Platform: platform}
 	app := application.New(application.Options{
 		Name:        "AI Mission Manager",
 		Description: "Desktop mission manager",
@@ -44,6 +45,9 @@ func main() {
 	platform.OpenURLFunc = app.Browser.OpenURL
 	platform.RevealItemFunc = func(path string) error {
 		return app.Env.OpenFileManager(path, true)
+	}
+	platform.OpenFileFunc = func(program string, args ...string) error {
+		return exec.Command(program, args...).Run()
 	}
 	platform.OpenDirectoryFunc = func(options backend.OpenDirectoryOptions) (any, error) {
 		dialog := app.Dialog.OpenFileWithOptions(&application.OpenFileDialogOptions{

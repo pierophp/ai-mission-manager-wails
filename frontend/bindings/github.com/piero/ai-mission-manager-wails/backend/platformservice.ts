@@ -20,3 +20,7 @@ export function OpenURL(url: string): $CancellablePromise<void> {
 export function RevealItemInDir(path: string): $CancellablePromise<void> {
     return $Call.ByID(864414793, path);
 }
+
+export function RevealPlanPath(path: string): $CancellablePromise<void> {
+    return $Call.ByID(3575050890, path);
+}

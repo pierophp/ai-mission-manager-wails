@@ -7,6 +7,7 @@ import (
 type PlatformService struct {
 	OpenURLFunc       func(string) error
 	RevealItemFunc    func(string) error
+	OpenFileFunc      func(string, ...string) error
 	OpenDirectoryFunc func(OpenDirectoryOptions) (any, error)
 }
 
@@ -27,6 +28,13 @@ func (s *PlatformService) RevealItemInDir(path string) error {
 		return errors.New("platform service is not ready")
 	}
 	return s.RevealItemFunc(path)
+}
+
+func (s *PlatformService) RevealPlanPath(path string) error {
+	if s.OpenFileFunc == nil {
+		return errors.New("platform service is not ready")
+	}
+	return s.OpenFileFunc("open", "-R", path)
 }
 
 func (s *PlatformService) OpenDirectory(options OpenDirectoryOptions) (any, error) {

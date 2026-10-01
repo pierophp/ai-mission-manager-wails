@@ -15,7 +15,7 @@ import type {
   RunSuggestion,
 } from "../../runtime/types";
 import type { GrillContinuationAction, Workflow } from "../../runtime/execution-types";
-import { command } from "../../runtime/command";
+import { command, invokeRevealPlan } from "../../runtime/command";
 import {
   normalizeHomeView,
   normalizeItemViews,
@@ -107,6 +107,7 @@ export const workCommands = {
   continueGrill: (runId: number, action: GrillContinuationAction) =>
     command("continueGrill", runId, action),
   goPlan: (runId: number) => command("goPlan", runId),
+  revealPlan: (runId: number) => invokeRevealPlan(runId),
   deleteRun: (runId: number) =>
     command("deleteRun", runId, true),
   prepareItemDeletion: (itemId: number) =>
@@ -250,6 +251,7 @@ export const workActions = {
     action: Parameters<typeof workCommands.continueGrill>[1],
   ) => () => workCommands.continueGrill(runId, action),
   goPlan: (runId: number) => () => workCommands.goPlan(runId),
+  revealPlan: (runId: number) => () => workCommands.revealPlan(runId),
   deleteRun: (runId: number) => () => workCommands.deleteRun(runId),
   prepareItemDeletion: (itemId: number) =>
     () => workCommands.prepareItemDeletion(itemId),

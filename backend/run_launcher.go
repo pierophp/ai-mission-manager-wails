@@ -38,6 +38,74 @@ type runLaunchStrategy struct {
 	WorktreeID           int64                      `json:"worktreeId"`
 }
 
+// UnmarshalJSON accepts the snake_case strategy nested in the existing
+// generated frontend binding as well as the camelCase request used by Go
+// callers. The top-level command still validates unknown argument keys.
+func (s *runLaunchStrategy) UnmarshalJSON(data []byte) error {
+	type camelCaseStrategy runLaunchStrategy
+	var strategy camelCaseStrategy
+	if err := json.Unmarshal(data, &strategy); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	allowed := map[string]bool{
+		"kind": true, "machineId": true, "machine_id": true,
+		"primaryRepositoryId": true, "primary_repository_id": true,
+		"agent": true, "configuration": true, "implementation_queue": true,
+		"executionProfile": true, "execution_profile": true,
+		"workflow": true, "prompt": true, "promptSelection": true,
+		"prompt_selection": true, "expectedCheckouts": true,
+		"expected_checkouts": true, "allowDirty": true, "allow_dirty": true,
+		"allowSharedCheckouts": true, "allow_shared_checkouts": true,
+		"worktreeId": true, "worktree_id": true, "language": true,
+	}
+	for key := range fields {
+		if !allowed[key] {
+			return fmt.Errorf("unknown launch strategy field %q", key)
+		}
+	}
+	if err := unmarshalLaunchStrategyAlias(fields, "machine_id", &strategy.MachineID); err != nil {
+		return err
+	}
+	if err := unmarshalLaunchStrategyAlias(fields, "primary_repository_id", &strategy.PrimaryRepositoryID); err != nil {
+		return err
+	}
+	if err := unmarshalLaunchStrategyAlias(fields, "execution_profile", &strategy.ExecutionProfile); err != nil {
+		return err
+	}
+	if err := unmarshalLaunchStrategyAlias(fields, "prompt_selection", &strategy.PromptSelection); err != nil {
+		return err
+	}
+	if err := unmarshalLaunchStrategyAlias(fields, "expected_checkouts", &strategy.ExpectedCheckouts); err != nil {
+		return err
+	}
+	if err := unmarshalLaunchStrategyAlias(fields, "allow_dirty", &strategy.AllowDirty); err != nil {
+		return err
+	}
+	if err := unmarshalLaunchStrategyAlias(fields, "allow_shared_checkouts", &strategy.AllowSharedCheckouts); err != nil {
+		return err
+	}
+	if err := unmarshalLaunchStrategyAlias(fields, "worktree_id", &strategy.WorktreeID); err != nil {
+		return err
+	}
+	if raw := fields["implementation_queue"]; len(raw) > 0 && string(raw) != "null" {
+		return errors.New("implementation_queue is not supported by this launcher")
+	}
+	*s = runLaunchStrategy(strategy)
+	return nil
+}
+
+func unmarshalLaunchStrategyAlias[T any](fields map[string]json.RawMessage, key string, target *T) error {
+	raw, ok := fields[key]
+	if !ok {
+		return nil
+	}
+	return json.Unmarshal(raw, target)
+}
+
 type DirectRunCheckoutPreview struct {
 	RepositoryID   int64  `json:"repositoryId"`
 	RepositoryName string `json:"repositoryName"`
