@@ -949,14 +949,28 @@ func validateContextProfile(s DomainState, machineID *int64, provider AgentKind,
 func validateGrill(c GrillConfiguration) error {
 	valid := strings.TrimSpace(c.Model) != "" && strings.TrimSpace(c.Effort) != "" && (c.Agent == AgentClaude || c.Agent == AgentCodex)
 	if c.Agent == AgentClaude {
-		models := map[string]bool{"claude-opus-5": true, "claude-sonnet-5": true, "claude-opus-4-8": true, "claude-sonnet-4-6": true, "claude-opus-4-5-20251101": true, "claude-sonnet-4-5-20250929": true, "claude-haiku-4-5-20251001": true, "claude-sonnet-4-5": true, "claude-haiku-4-5": true}
-		valid = valid && models[c.Model]
+		valid = valid && isKnownClaudeModel(c.Model)
 	}
 	if !valid {
 		return DomainError(fmt.Sprintf("Grill configuration is invalid for %s: model %s, effort %s", agentDebug(c.Agent), c.Model, c.Effort))
 	}
 	return nil
 }
+
+func isKnownClaudeModel(model string) bool {
+	for _, catalog := range GrillModelCatalog() {
+		if catalog.Agent != AgentClaude {
+			continue
+		}
+		for _, candidate := range catalog.Models {
+			if candidate.ID == model {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func agentDebug(agent AgentKind) string {
 	switch agent {
 	case AgentClaude:

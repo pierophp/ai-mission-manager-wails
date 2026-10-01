@@ -16,6 +16,30 @@ type CommandService struct{ Runtime *Runtime }
 type commandHandler func(*CommandService, json.RawMessage) (json.RawMessage, error)
 
 var commandHandlers = map[string]commandHandler{
+	"list_grill_model_catalog": noArgs(func(s *CommandService) (any, error) {
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.listGrillModelCatalog()
+	}),
+	"refresh_grill_model_catalog": noArgs(func(s *CommandService) (any, error) {
+		if writable(s) {
+			s.Runtime.refreshGrillModelCatalog()
+		}
+		return nil, nil
+	}),
+	"list_plan_usage": noArgs(func(s *CommandService) (any, error) {
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.listPlanUsage()
+	}),
+	"refresh_plan_usage": noArgs(func(s *CommandService) (any, error) {
+		if writable(s) {
+			s.Runtime.refreshPlanUsage()
+		}
+		return nil, nil
+	}),
 	"get_setup_state": noArgs(func(s *CommandService) (any, error) {
 		if !writable(s) {
 			return nil, errors.New("runtime is not configured")
@@ -496,7 +520,7 @@ var commandHandlers = map[string]commandHandler{
 
 var registeredCommandArguments = map[string][]string{
 	"get_setup_state": {}, "complete_setup": {"contextName", "provider"}, "get_health_status": {"provider"},
-	"list_contexts": {}, "new_context_configuration": {}, "list_context_attention_defaults": {}, "list_projects": {}, "list_repositories": {}, "list_repository_locations": {}, "list_audit_history": {}, "get_activity_tab": {},
+	"list_contexts": {}, "new_context_configuration": {}, "list_context_attention_defaults": {}, "list_projects": {}, "list_repositories": {}, "list_repository_locations": {}, "list_audit_history": {}, "get_activity_tab": {}, "list_grill_model_catalog": {}, "refresh_grill_model_catalog": {}, "list_plan_usage": {}, "refresh_plan_usage": {},
 	"create_context": {"name"}, "create_context_configuration": {"configuration"}, "update_context": {"contextId", "name"}, "update_context_configuration": {"contextId", "configuration"},
 	"set_context_grill_defaults": {"contextId", "defaults"}, "set_context_implement_defaults": {"contextId", "defaults"}, "set_context_dirty_checkout_check": {"contextId", "enabled"},
 	"set_context_attention_default": {"contextId", "objectKind", "policy"}, "create_project": {"name", "contextId", "defaultItemStatus", "executionMode"}, "update_project": {"projectId", "name", "defaultItemStatus", "executionMode"},

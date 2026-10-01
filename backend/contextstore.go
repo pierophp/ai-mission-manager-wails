@@ -29,6 +29,11 @@ type Runtime struct {
 	machineChecker          MachineCheckFunc
 	machineReadiness        map[int64]MachineReadiness
 	machineCheckGenerations map[int64]uint64
+	backgroundMu            sync.Mutex
+	planUsageRefreshing     bool
+	planUsageLastAttempt    int64
+	catalogRefreshing       bool
+	catalogLastAttempt      int64
 }
 
 func NewRuntime(contexts ContextReader) *Runtime {

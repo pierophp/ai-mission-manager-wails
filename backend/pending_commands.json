@@ -1,8 +1,4 @@
 [
-  "list_grill_model_catalog",
-  "refresh_grill_model_catalog",
-  "list_plan_usage",
-  "refresh_plan_usage",
   "list_machines",
   "list_cli_configuration_profiles",
   "create_cli_configuration_profile",
