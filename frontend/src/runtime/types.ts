@@ -471,6 +471,12 @@ export type ExternalChangePolicy = {
   metadata: boolean;
 };
 
+export type LinkAttentionOverrides = {
+  title_attention: boolean | null;
+  state_attention: boolean | null;
+  metadata_attention: boolean | null;
+};
+
 export type AttentionEntry = {
   kind:
     | "external_change"
@@ -496,6 +502,9 @@ export type ExternalLink = {
   external_object_id: number;
   reviewed_activity_id: number;
   attention_policy: ExternalChangePolicy | null;
+  title_attention?: boolean | null;
+  state_attention?: boolean | null;
+  metadata_attention?: boolean | null;
   watch_until: string | null;
   review_at: string | null;
   purpose: LinkPurpose;
@@ -585,11 +594,13 @@ export type ExternalObjectDeletionPlan = {
   externalKey: string;
   canonicalUrl: string;
   linkIds: number[];
+  clearedSpecLinkIds: number[];
   snapshotCount: number;
   activityCount: number;
 };
 
 export type ExternalObjectDeletionPreview = {
+	state_fingerprint: string;
   plan: ExternalObjectDeletionPlan;
   links: {
     linkId: number;

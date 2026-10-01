@@ -22,6 +22,27 @@ type PollResult struct {
 	Refreshed int           `json:"refreshed"`
 	Failures  []PollFailure `json:"failures"`
 }
+type ExternalObjectDeletionPreview struct {
+	StateFingerprint string                              `json:"state_fingerprint"`
+	Plan             domain.ExternalObjectDeletionPlan   `json:"plan"`
+	Links            []ExternalObjectLinkDeletionPreview `json:"links"`
+	ProviderWarning  string                              `json:"providerWarning"`
+}
+type ExternalObjectLinkDeletionPreview struct {
+	LinkID         int64  `json:"linkId"`
+	ItemID         int64  `json:"itemId"`
+	ItemIdentifier string `json:"itemIdentifier"`
+	ItemTitle      string `json:"itemTitle"`
+}
+type ExternalObjectDeletionResult struct {
+	Summary ExternalObjectDeletionSummary `json:"summary"`
+}
+type ExternalObjectDeletionSummary struct {
+	ExternalObjectID int64 `json:"externalObjectId"`
+	LinkCount        int   `json:"linkCount"`
+	SnapshotCount    int   `json:"snapshotCount"`
+	ActivityCount    int   `json:"activityCount"`
+}
 type IssueDocument struct {
 	Body       string     `json:"body"`
 	BodyFormat string     `json:"bodyFormat"`
@@ -98,6 +119,73 @@ func metadataAsDomain(values []externalMetadata) []domain.ExternalMetadata {
 		out = append(out, domain.ExternalMetadata{Key: v.Key, Value: v.Value})
 	}
 	return out
+}
+
+func (r *Runtime) prepareExternalObjectDeletion(id int64) (ExternalObjectDeletionPreview, error) {
+	s, err := r.stateSnapshot()
+	if err != nil {
+		return ExternalObjectDeletionPreview{}, err
+	}
+	preview, err := domain.PrepareExternalObjectDeletion(s, id)
+	if err != nil {
+		return ExternalObjectDeletionPreview{}, err
+	}
+	links := []ExternalObjectLinkDeletionPreview{}
+	for _, link := range s.Links {
+		if link.ExternalObjectID != id {
+			continue
+		}
+		item, _, e := itemAndContext(s, link.ItemID)
+		if e != nil {
+			return ExternalObjectDeletionPreview{}, e
+		}
+		links = append(links, ExternalObjectLinkDeletionPreview{LinkID: link.ID, ItemID: item.ID, ItemIdentifier: item.HumanIdentifier, ItemTitle: item.Title})
+	}
+	return ExternalObjectDeletionPreview{StateFingerprint: preview.StateFingerprint, Plan: preview.Plan, Links: links, ProviderWarning: "Provider-owned objects are never deleted; this only removes local External Object data."}, nil
+}
+func (r *Runtime) deleteExternalObject(id int64, confirmed bool, fingerprint string) (ExternalObjectDeletionResult, error) {
+	s, err := r.stateSnapshot()
+	if err != nil {
+		return ExternalObjectDeletionResult{}, err
+	}
+	preview, err := domain.PrepareExternalObjectDeletion(s, id)
+	if err != nil {
+		return ExternalObjectDeletionResult{}, err
+	}
+	_, err = r.transition(domain.Event{Kind: "delete_external_object", ExternalObjectID: id, Confirmed: confirmed, StateFingerprint: fingerprint})
+	if err != nil {
+		return ExternalObjectDeletionResult{}, err
+	}
+	return ExternalObjectDeletionResult{Summary: ExternalObjectDeletionSummary{ExternalObjectID: id, LinkCount: len(preview.Plan.LinkIDs), SnapshotCount: preview.Plan.SnapshotCount, ActivityCount: preview.Plan.ActivityCount}}, nil
+}
+func (r *Runtime) unlinkExternalLink(id int64, confirmed bool) (domain.ExternalLinkDeletionResult, error) {
+	s, err := r.stateSnapshot()
+	if err != nil {
+		return domain.ExternalLinkDeletionResult{}, err
+	}
+	var objectID int64
+	for _, link := range s.Links {
+		if link.ID == id {
+			objectID = link.ExternalObjectID
+			break
+		}
+	}
+	if objectID == 0 {
+		return domain.ExternalLinkDeletionResult{}, fmt.Errorf("Link %d does not exist", id)
+	}
+	decision, err := r.transition(domain.Event{Kind: "unlink_external_link", LinkID: id, Confirmed: confirmed})
+	if err != nil {
+		return domain.ExternalLinkDeletionResult{}, err
+	}
+	return domain.ExternalLinkDeletionResult{LinkID: id, ExternalObjectID: objectID, ExternalObjectDeleted: !domainHasExternalObject(decision.State, objectID)}, nil
+}
+func domainHasExternalObject(s domain.DomainState, id int64) bool {
+	for _, v := range s.ExternalObjects {
+		if v.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runtime) linkExternalObject(itemID int64, rawURL string) (ExternalLinkAction, error) {

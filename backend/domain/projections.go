@@ -408,17 +408,36 @@ func attentionEntryForLink(state DomainState, link Link, object ExternalObject, 
 	return &AttentionEntry{Kind: AttentionExternalChange, LinkID: link.ID, ItemID: link.ItemID, ExternalObjectID: object.ID, SourceTitle: title, SourceURL: object.CanonicalURL, Activities: activities, Summary: strings.Join(descriptions, "; ")}
 }
 func effectiveAttentionPolicy(state DomainState, link Link, object ExternalObject) ExternalChangePolicy {
-	if link.AttentionPolicy != nil {
-		return *link.AttentionPolicy
-	}
+	policy := ExternalChangePolicy{}
+	foundDefault := false
 	if ctx, ok := contextForItem(state, link.ItemID); ok {
 		for _, d := range state.AttentionDefaults {
 			if d.ContextID == ctx && d.ObjectKind == object.Kind {
-				return d.Policy
+				policy = d.Policy
+				foundDefault = true
+				break
 			}
 		}
 	}
-	return ExternalChangePolicy{Title: true, State: true, Metadata: true}
+	if !foundDefault {
+		policy = ExternalChangePolicy{Title: true, State: true, Metadata: true}
+	}
+	if link.TitleAttention != nil {
+		policy.Title = *link.TitleAttention
+	} else if link.AttentionPolicy != nil {
+		policy.Title = link.AttentionPolicy.Title
+	}
+	if link.StateAttention != nil {
+		policy.State = *link.StateAttention
+	} else if link.AttentionPolicy != nil {
+		policy.State = link.AttentionPolicy.State
+	}
+	if link.MetadataAttention != nil {
+		policy.Metadata = *link.MetadataAttention
+	} else if link.AttentionPolicy != nil {
+		policy.Metadata = link.AttentionPolicy.Metadata
+	}
+	return policy
 }
 func supportsImplementationSpec(o ExternalObject) bool {
 	return o.Provider == ProviderGitHub && o.Kind == ObjectIssue || o.Provider == ProviderAtlassian && (o.Kind == ObjectIssue || o.Kind == ObjectDocument) || o.Provider == ProviderGeneric && strings.HasPrefix(o.ExternalKey, "local:")

@@ -307,30 +307,57 @@ type LinkProvenance struct {
 	Ordinal   *uint                   `json:"ordinal"`
 	BlockedBy []string                `json:"blocked_by"`
 }
+type LinkAttentionOverrides struct {
+	TitleAttention    *bool `json:"title_attention,omitempty"`
+	StateAttention    *bool `json:"state_attention,omitempty"`
+	MetadataAttention *bool `json:"metadata_attention,omitempty"`
+}
 type ExternalChangePolicy struct {
 	Title    bool `json:"title"`
 	State    bool `json:"state"`
 	Metadata bool `json:"metadata"`
 }
 type Link struct {
-	ID                   int64                 `json:"id"`
-	ItemID               int64                 `json:"item_id"`
-	ExternalObjectID     int64                 `json:"external_object_id"`
-	ReviewedActivityID   int64                 `json:"reviewed_activity_id"`
-	AttentionPolicy      *ExternalChangePolicy `json:"attention_policy"`
-	WatchUntil           *string               `json:"watch_until"`
-	ReviewAt             *string               `json:"review_at"`
-	Purpose              LinkPurpose           `json:"purpose"`
-	SpecExternalObjectID *int64                `json:"spec_external_object_id"`
-	Provenance           *LinkProvenance       `json:"provenance"`
-}
-type LinkAttentionState struct {
-	LinkID             int64                 `json:"link_id"`
+	ID                 int64                 `json:"id"`
+	ItemID             int64                 `json:"item_id"`
+	ExternalObjectID   int64                 `json:"external_object_id"`
 	ReviewedActivityID int64                 `json:"reviewed_activity_id"`
 	AttentionPolicy    *ExternalChangePolicy `json:"attention_policy"`
-	WatchUntil         *string               `json:"watch_until"`
-	ReviewAt           *string               `json:"review_at"`
-	Provenance         *LinkProvenance       `json:"provenance"`
+	LinkAttentionOverrides
+	WatchUntil           *string         `json:"watch_until"`
+	ReviewAt             *string         `json:"review_at"`
+	Purpose              LinkPurpose     `json:"purpose"`
+	SpecExternalObjectID *int64          `json:"spec_external_object_id"`
+	Provenance           *LinkProvenance `json:"provenance"`
+}
+type LinkAttentionState struct {
+	LinkAttentionOverrides
+	LinkID             int64           `json:"link_id"`
+	ReviewedActivityID int64           `json:"reviewed_activity_id"`
+	WatchUntil         *string         `json:"watch_until"`
+	ReviewAt           *string         `json:"review_at"`
+	Provenance         *LinkProvenance `json:"provenance"`
+}
+
+type ExternalObjectDeletionPreview struct {
+	StateFingerprint string                     `json:"state_fingerprint"`
+	Plan             ExternalObjectDeletionPlan `json:"plan"`
+}
+type ExternalObjectDeletionPlan struct {
+	ExternalObjectID   int64              `json:"externalObjectId"`
+	Provider           ExternalProvider   `json:"provider"`
+	Kind               ExternalObjectKind `json:"kind"`
+	ExternalKey        string             `json:"externalKey"`
+	CanonicalURL       string             `json:"canonicalUrl"`
+	LinkIDs            []int64            `json:"linkIds"`
+	ClearedSpecLinkIDs []int64            `json:"clearedSpecLinkIds"`
+	SnapshotCount      int                `json:"snapshotCount"`
+	ActivityCount      int                `json:"activityCount"`
+}
+type ExternalLinkDeletionResult struct {
+	LinkID                int64 `json:"linkId"`
+	ExternalObjectID      int64 `json:"externalObjectId"`
+	ExternalObjectDeleted bool  `json:"externalObjectDeleted"`
 }
 type ExternalMetadata struct {
 	Key   string `json:"key"`

@@ -7,6 +7,7 @@ import type {
   GrillLanguage,
   Item,
   ItemRelationKind,
+  LinkAttentionOverrides,
   Run,
   RunLaunchRequest,
   RunLaunchTargetKind,
@@ -116,8 +117,8 @@ export const workCommands = {
     command("unlinkExternalLink", linkId, true),
   prepareExternalObjectDeletion: (externalObjectId: number) =>
     command("prepareExternalObjectDeletion", externalObjectId),
-  deleteExternalObject: (externalObjectId: number) =>
-    command("deleteExternalObject", externalObjectId, true),
+  deleteExternalObject: (externalObjectId: number, stateFingerprint: string) =>
+    command("deleteExternalObject", externalObjectId, true, stateFingerprint),
   composeRunPrompt: (
     itemId: number,
     executionProfile: Run["execution_profile"],
@@ -159,7 +160,7 @@ export const workCommands = {
     command("createGithubIssue", itemId, repositoryId, title, body),
   setLinkAttentionPolicy: (
     linkId: number,
-    policy: ExternalLinkView["link"]["attention_policy"],
+    policy: LinkAttentionOverrides | null,
   ) =>
     command("setLinkAttentionPolicy", linkId, policy),
   setLinkPurpose: (
@@ -257,8 +258,8 @@ export const workActions = {
     () => workCommands.unlinkExternalLink(linkId),
   prepareExternalObjectDeletion: (externalObjectId: number) =>
     () => workCommands.prepareExternalObjectDeletion(externalObjectId),
-  deleteExternalObject: (externalObjectId: number) =>
-    () => workCommands.deleteExternalObject(externalObjectId),
+  deleteExternalObject: (externalObjectId: number, stateFingerprint: string) =>
+    () => workCommands.deleteExternalObject(externalObjectId, stateFingerprint),
   composeRunPrompt: (
     itemId: number,
     executionProfile: Parameters<typeof workCommands.composeRunPrompt>[1],

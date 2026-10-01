@@ -202,6 +202,54 @@ func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persis
 			}
 			out = append(out, persistence.Effect{SQL: `INSERT INTO external_links(id,item_id,external_object_id,purpose,spec_external_object_id) VALUES(?,?,?,?,?)`, Args: []any{link.ID, link.ItemID, link.ExternalObjectID, link.Purpose, link.SpecExternalObjectID}, InsertedSequence: "next_link_id", InsertedID: link.ID})
 			audit = append(audit, auditJSON("linkCreated", "link_id", link.ID))
+		case "update_external_link":
+			link := effect.ExternalLink
+			if link == nil {
+				return nil, nil, errors.New("external link effect has no Link")
+			}
+			var title, state, metadata any
+			if link.TitleAttention != nil {
+				if *link.TitleAttention {
+					title = 1
+				} else {
+					title = 0
+				}
+			}
+			if link.StateAttention != nil {
+				if *link.StateAttention {
+					state = 1
+				} else {
+					state = 0
+				}
+			}
+			if link.MetadataAttention != nil {
+				if *link.MetadataAttention {
+					metadata = 1
+				} else {
+					metadata = 0
+				}
+			}
+			var provenance any
+			if link.Provenance != nil {
+				raw, err := json.Marshal(link.Provenance)
+				if err != nil {
+					return nil, nil, err
+				}
+				provenance = string(raw)
+			}
+			out = append(out, persistence.Effect{SQL: `INSERT INTO link_attention_state(link_id,reviewed_activity_id,title_attention,state_attention,metadata_attention,watch_until,review_at,provenance_json) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(link_id) DO UPDATE SET reviewed_activity_id=excluded.reviewed_activity_id,title_attention=excluded.title_attention,state_attention=excluded.state_attention,metadata_attention=excluded.metadata_attention,watch_until=excluded.watch_until,review_at=excluded.review_at,provenance_json=excluded.provenance_json`, Args: []any{link.ID, link.ReviewedActivityID, title, state, metadata, link.WatchUntil, link.ReviewAt, provenance}})
+			out = append(out, persistence.Effect{SQL: `UPDATE external_links SET purpose=?,spec_external_object_id=? WHERE id=?`, Args: []any{link.Purpose, link.SpecExternalObjectID, link.ID}})
+			audit = append(audit, auditJSON("linkUpdated", "link_id", link.ID))
+		case "delete_external_link":
+			link := effect.ExternalLink
+			if link == nil {
+				return nil, nil, errors.New("external link effect has no Link")
+			}
+			out = append(out, persistence.Effect{SQL: `DELETE FROM external_links WHERE id=?`, Args: []any{link.ID}})
+			audit = append(audit, auditJSON("linkDeleted", "link_id", link.ID))
+		case "delete_external_object":
+			out = append(out, persistence.Effect{SQL: `DELETE FROM external_objects WHERE id=?`, Args: []any{effect.ExternalObjectID}})
+			audit = append(audit, auditJSON("externalObjectDeleted", "external_object_id", effect.ExternalObjectID))
 		case "persist_external_snapshot":
 			snapshot := effect.ExternalSnapshot
 			if snapshot == nil {
@@ -286,6 +334,8 @@ func (r *Runtime) runEvent(event domain.Event) (any, error) {
 		return nil, err
 	}
 	switch event.Kind {
+	case "set_link_attention_policy", "set_link_purpose", "set_link_watch_until", "set_link_review_at", "clear_link_review_at", "mark_link_reviewed":
+		return r.externalLinkView(event.LinkID)
 	case "create_context", "create_context_configuration":
 		return projectContext(decision.State.Contexts[len(decision.State.Contexts)-1]), nil
 	case "update_context", "update_context_configuration", "set_context_grill_defaults", "set_context_implement_defaults", "set_context_dirty_checkout_check":

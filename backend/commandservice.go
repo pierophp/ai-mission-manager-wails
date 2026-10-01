@@ -584,6 +584,103 @@ var commandHandlers = map[string]commandHandler{
 		}
 		return s.Runtime.refreshExternalObject(a.ExternalObjectID)
 	}),
+	"set_link_attention_policy": withArgs([]string{"linkId", "policy"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			LinkID int64                          `json:"linkId"`
+			Policy *domain.LinkAttentionOverrides `json:"policy"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "set_link_attention_policy", LinkID: a.LinkID, AttentionOverrides: a.Policy})
+	}),
+	"set_link_purpose": withArgs([]string{"linkId", "purpose", "specExternalObjectId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			LinkID               int64              `json:"linkId"`
+			Purpose              domain.LinkPurpose `json:"purpose"`
+			SpecExternalObjectID *int64             `json:"specExternalObjectId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "set_link_purpose", LinkID: a.LinkID, Purpose: a.Purpose, SpecExternalObjectID: a.SpecExternalObjectID})
+	}),
+	"set_link_watch_until": withArgs([]string{"linkId", "watchUntil"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			LinkID     int64   `json:"linkId"`
+			WatchUntil *string `json:"watchUntil"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		value := ""
+		if a.WatchUntil != nil {
+			value = *a.WatchUntil
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "set_link_watch_until", LinkID: a.LinkID, Timestamp: value})
+	}),
+	"set_link_review_at": withArgs([]string{"linkId", "reviewAt"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			LinkID   int64   `json:"linkId"`
+			ReviewAt *string `json:"reviewAt"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		value := ""
+		if a.ReviewAt != nil {
+			value = *a.ReviewAt
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "set_link_review_at", LinkID: a.LinkID, Timestamp: value})
+	}),
+	"clear_link_review_at": withArgs([]string{"linkId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			LinkID int64 `json:"linkId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "clear_link_review_at", LinkID: a.LinkID})
+	}),
+	"mark_link_reviewed": withArgs([]string{"linkId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			LinkID int64 `json:"linkId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.runEvent(domain.Event{Kind: "mark_link_reviewed", LinkID: a.LinkID})
+	}),
+	"unlink_external_link": withArgs([]string{"linkId", "confirmed"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			LinkID    int64 `json:"linkId"`
+			Confirmed bool  `json:"confirmed"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.unlinkExternalLink(a.LinkID, a.Confirmed)
+	}),
+	"prepare_external_object_deletion": withArgs([]string{"externalObjectId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ExternalObjectID int64 `json:"externalObjectId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.prepareExternalObjectDeletion(a.ExternalObjectID)
+	}),
+	"delete_external_object": withArgs([]string{"externalObjectId", "confirmed", "stateFingerprint"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ExternalObjectID int64  `json:"externalObjectId"`
+			Confirmed        bool   `json:"confirmed"`
+			StateFingerprint string `json:"stateFingerprint"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.deleteExternalObject(a.ExternalObjectID, a.Confirmed, a.StateFingerprint)
+	}),
 	"poll_external_objects": noArgs(func(s *CommandService) (any, error) { return s.Runtime.pollExternalObjects() }),
 }
 
@@ -596,6 +693,7 @@ var registeredCommandArguments = map[string][]string{
 	"register_repository": {"projectId", "name", "remoteUrl"}, "update_repository": {"repositoryId", "name", "remoteUrl", "baseBranch"}, "register_repository_at_location": {"projectId", "name", "remoteUrl", "baseBranch", "machineId", "checkoutPath", "worktreeRoot", "cloneIntoDestination"}, "update_repository_location": {"repositoryId", "previousMachineId", "machineId", "checkoutPath", "worktreeRoot"},
 	"get_home": {"contextId", "now"}, "search_items_command": {"query", "contextId"}, "list_inbox_items": {}, "create_item": {"title", "contextId", "projectId", "notes"}, "set_item_status": {"itemId", "status"}, "set_item_title": {"itemId", "title"}, "set_item_notes": {"itemId", "notes"}, "add_item_reminder": {"itemId", "remindAt"}, "remove_item_reminder": {"itemId", "reminderId"}, "set_item_relation": {"fromItemId", "toItemId", "kind"},
 	"link_external_object": {"itemId", "url"}, "create_github_issue": {"itemId", "repositoryId", "title", "body"}, "add_external_comment": {"linkId", "body"}, "fetch_issue_document": {"externalObjectId"}, "fetch_external_comments": {"externalObjectId"}, "fetch_external_document": {"externalObjectId"}, "refresh_external_object": {"externalObjectId"}, "poll_external_objects": {},
+	"set_link_attention_policy": {"linkId", "policy"}, "set_link_purpose": {"linkId", "purpose", "specExternalObjectId"}, "set_link_watch_until": {"linkId", "watchUntil"}, "set_link_review_at": {"linkId", "reviewAt"}, "clear_link_review_at": {"linkId"}, "mark_link_reviewed": {"linkId"}, "unlink_external_link": {"linkId", "confirmed"}, "prepare_external_object_deletion": {"externalObjectId"}, "delete_external_object": {"externalObjectId", "confirmed", "stateFingerprint"},
 }
 
 func (s *CommandService) Invoke(command string, argsJSON string) (json.RawMessage, error) {

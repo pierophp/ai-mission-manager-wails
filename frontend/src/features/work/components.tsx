@@ -17,7 +17,6 @@ import {
   CardHeader,
   CardTitle,
 } from "../../components/ui/card";
-import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import {
   NativeSelect,
@@ -29,10 +28,10 @@ import { errorMessage } from "../../runtime/errors";
 import { ExternalUrlLink } from "../../components/ExternalUrlLink";
 import type {
   AttentionEntry,
-  ExternalChangePolicy,
   ExternalLinkView,
   ExternalComment,
   ItemView,
+  LinkAttentionOverrides,
   LinkPurpose,
   RunSuggestion,
 } from "../../runtime/types";
@@ -193,7 +192,7 @@ export function ExternalLinkCard({
     specExternalObjectId: number | null,
   ) => Promise<void>;
   specs: ExternalLinkView[];
-  onSavePolicy: (policy: ExternalChangePolicy | null) => Promise<void>;
+  onSavePolicy: (policy: LinkAttentionOverrides | null) => Promise<void>;
   onMarkReviewed: () => Promise<void>;
   onSaveWatchUntil: (watchUntil: string | null) => Promise<void>;
   onSaveReviewAt: (reviewAt: string | null) => Promise<void>;
@@ -201,7 +200,9 @@ export function ExternalLinkCard({
   onAddComment: (body: string) => Promise<void>;
 }) {
   const { object, snapshot } = externalLink;
-  const [policy, setPolicy] = useState(externalLink.attention_policy);
+  const [policy, setPolicy] = useState<LinkAttentionOverrides>(() =>
+    linkAttentionOverrides(externalLink),
+  );
   const [watchUntil, setWatchUntil] = useState(
     externalLink.link.watch_until ?? "",
   );
@@ -218,7 +219,7 @@ export function ExternalLinkCard({
     externalLink.link.review_at <= currentMinute();
 
   useEffect(() => {
-    setPolicy(externalLink.attention_policy);
+    setPolicy(linkAttentionOverrides(externalLink));
     setWatchUntil(externalLink.link.watch_until ?? "");
     setReviewAt(externalLink.link.review_at ?? "");
   }, [
@@ -552,43 +553,55 @@ export function ExternalLinkCard({
           <span className="text-sm font-medium">Attention for this Link</span>
           <div className="flex flex-wrap gap-4">
             <label className="flex items-center gap-2 text-sm font-normal">
-              <Checkbox
-                checked={policy.title}
-                onCheckedChange={(checked) =>
-                  setPolicy((current) => ({
-                    ...current,
-                    title: checked === true,
-                  }))
-                }
-                disabled={isSaving}
-              />
               Title
-            </label>
-            <label className="flex items-center gap-2 text-sm font-normal">
-              <Checkbox
-                checked={policy.state}
-                onCheckedChange={(checked) =>
+              <NativeSelect
+                value={attentionChoice(policy.title_attention)}
+                disabled={isSaving}
+                onChange={(event) =>
                   setPolicy((current) => ({
                     ...current,
-                    state: checked === true,
+                    title_attention: parseAttentionChoice(event.target.value),
                   }))
                 }
-                disabled={isSaving}
-              />
+              >
+                <NativeSelectOption value="inherit">Inherit</NativeSelectOption>
+                <NativeSelectOption value="on">On</NativeSelectOption>
+                <NativeSelectOption value="off">Off</NativeSelectOption>
+              </NativeSelect>
+            </label>
+            <label className="flex items-center gap-2 text-sm font-normal">
               State
-            </label>
-            <label className="flex items-center gap-2 text-sm font-normal">
-              <Checkbox
-                checked={policy.metadata}
-                onCheckedChange={(checked) =>
+              <NativeSelect
+                value={attentionChoice(policy.state_attention)}
+                disabled={isSaving}
+                onChange={(event) =>
                   setPolicy((current) => ({
                     ...current,
-                    metadata: checked === true,
+                    state_attention: parseAttentionChoice(event.target.value),
                   }))
                 }
-                disabled={isSaving}
-              />
+              >
+                <NativeSelectOption value="inherit">Inherit</NativeSelectOption>
+                <NativeSelectOption value="on">On</NativeSelectOption>
+                <NativeSelectOption value="off">Off</NativeSelectOption>
+              </NativeSelect>
+            </label>
+            <label className="flex items-center gap-2 text-sm font-normal">
               Metadata
+              <NativeSelect
+                value={attentionChoice(policy.metadata_attention)}
+                disabled={isSaving}
+                onChange={(event) =>
+                  setPolicy((current) => ({
+                    ...current,
+                    metadata_attention: parseAttentionChoice(event.target.value),
+                  }))
+                }
+              >
+                <NativeSelectOption value="inherit">Inherit</NativeSelectOption>
+                <NativeSelectOption value="on">On</NativeSelectOption>
+                <NativeSelectOption value="off">Off</NativeSelectOption>
+              </NativeSelect>
             </label>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -601,7 +614,7 @@ export function ExternalLinkCard({
             >
               Save Link policy
             </Button>
-            {externalLink.link.attention_policy && (
+            {(policy.title_attention !== null || policy.state_attention !== null || policy.metadata_attention !== null) && (
               <Button
                 type="button"
                 size="sm"
@@ -805,6 +818,22 @@ export function RunSuggestionCard({
       </CardContent>
     </Card>
   );
+}
+
+function linkAttentionOverrides(link: ExternalLinkView): LinkAttentionOverrides {
+  return {
+    title_attention: link.link.title_attention ?? null,
+    state_attention: link.link.state_attention ?? null,
+    metadata_attention: link.link.metadata_attention ?? null,
+  };
+}
+
+function attentionChoice(value: boolean | null): string {
+  return value === null ? "inherit" : value ? "on" : "off";
+}
+
+function parseAttentionChoice(value: string): boolean | null {
+  return value === "inherit" ? null : value === "on";
 }
 
 function attentionEntryLabel(entry: AttentionEntry): string {

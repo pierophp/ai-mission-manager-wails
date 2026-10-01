@@ -26,9 +26,6 @@
   "delete_machine",
   "prepare_item_deletion",
   "delete_item",
-  "prepare_external_object_deletion",
-  "delete_external_object",
-  "unlink_external_link",
   "delete_run",
   "compose_run_prompt",
   "get_run_launch_options",
@@ -52,11 +49,5 @@
   "check_implementation_queue",
   "skip_implementation_queue_entry",
   "cancel_implementation_queue",
-  "finish_run",
-  "set_link_attention_policy",
-  "set_link_purpose",
-  "set_link_watch_until",
-  "set_link_review_at",
-  "clear_link_review_at",
-  "mark_link_reviewed"
+  "finish_run"
 ]

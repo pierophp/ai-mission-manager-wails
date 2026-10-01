@@ -682,6 +682,12 @@ func Decide(input DomainState, event Event) (Decision, error) {
 		return decideLinkExternalObject(state, event.ItemID, *event.ExternalObject, event.ExternalSnapshot)
 	case "refresh_external_object":
 		return decideRefreshExternalObject(state, event.ExternalObjectID, event.ExternalSnapshot)
+	case "set_link_attention_policy", "set_link_purpose", "set_link_watch_until", "set_link_review_at", "clear_link_review_at", "mark_link_reviewed":
+		return decideLinkMutation(state, event)
+	case "unlink_external_link":
+		return decideUnlinkExternalLink(state, event)
+	case "delete_external_object":
+		return decideDeleteExternalObject(state, event)
 	case "create_item":
 		title := strings.TrimSpace(event.Name)
 		if title == "" {

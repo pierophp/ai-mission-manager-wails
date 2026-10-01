@@ -169,17 +169,17 @@ export function LinksTab({
     const { plan } = externalObjectDeletionPreview;
     confirm({
       title: `Remove this ${externalObjectKindLabel(plan.kind)} locally?`,
-      description: `This will remove ${plan.linkIds.length} Link(s), ${plan.snapshotCount} snapshot(s), and ${plan.activityCount} Activity record(s). Provider-owned objects are never deleted.`,
+      description: `This will remove ${plan.linkIds.length} Link(s), clear ${plan.clearedSpecLinkIds.length} Spec reference(s), and remove ${plan.snapshotCount} snapshot(s) and ${plan.activityCount} Activity record(s). Provider-owned objects are never deleted.`,
       confirmLabel: "Remove locally",
-      onConfirm: () => void executeDeleteExternalObject(plan.externalObjectId),
+      onConfirm: () => void executeDeleteExternalObject(plan.externalObjectId, externalObjectDeletionPreview.state_fingerprint),
     });
   }
 
-  async function executeDeleteExternalObject(externalObjectId: number) {
+  async function executeDeleteExternalObject(externalObjectId: number, stateFingerprint: string) {
     await whileSaving(async () => {
       try {
         const result = await workCommand.execute(
-          workActions.deleteExternalObject(externalObjectId),
+          workActions.deleteExternalObject(externalObjectId, stateFingerprint),
         );
         setExternalObjectDeletionPreview(undefined);
         await onChanged();

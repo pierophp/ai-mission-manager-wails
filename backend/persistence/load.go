@@ -488,8 +488,17 @@ func loadLinks(ctx context.Context, db *sql.DB) ([]domain.Link, error) {
 			return v, e
 		}
 		attention := domain.LinkAttentionState{LinkID: v.ID, ReviewedActivityID: v.ReviewedActivityID}
-		if title.Valid && state.Valid && metadata.Valid {
-			attention.AttentionPolicy = &domain.ExternalChangePolicy{Title: title.Int64 != 0, State: state.Int64 != 0, Metadata: metadata.Int64 != 0}
+		if title.Valid {
+			value := title.Int64 != 0
+			attention.TitleAttention = &value
+		}
+		if state.Valid {
+			value := state.Int64 != 0
+			attention.StateAttention = &value
+		}
+		if metadata.Valid {
+			value := metadata.Int64 != 0
+			attention.MetadataAttention = &value
 		}
 		if watch.Valid {
 			attention.WatchUntil = &watch.String
@@ -509,7 +518,10 @@ func loadLinks(ctx context.Context, db *sql.DB) ([]domain.Link, error) {
 			}
 		}
 		v.ReviewedActivityID = attention.ReviewedActivityID
-		v.AttentionPolicy = attention.AttentionPolicy
+		if attention.TitleAttention != nil && attention.StateAttention != nil && attention.MetadataAttention != nil {
+			v.AttentionPolicy = &domain.ExternalChangePolicy{Title: *attention.TitleAttention, State: *attention.StateAttention, Metadata: *attention.MetadataAttention}
+		}
+		v.TitleAttention, v.StateAttention, v.MetadataAttention = attention.TitleAttention, attention.StateAttention, attention.MetadataAttention
 		v.WatchUntil = attention.WatchUntil
 		v.ReviewAt = attention.ReviewAt
 		v.Provenance = attention.Provenance

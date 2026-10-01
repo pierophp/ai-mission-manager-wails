@@ -44,6 +44,9 @@ function normalizeItemView(view: Generated.ItemView): ItemView {
       link: {
         ...linkView.link,
         purpose: required(linkView.link.purpose, "ExternalLink.purpose"),
+        title_attention: linkView.link.title_attention ?? null,
+        state_attention: linkView.link.state_attention ?? null,
+        metadata_attention: linkView.link.metadata_attention ?? null,
         spec_external_object_id: linkView.link.spec_external_object_id ?? null,
         provenance: linkView.link.provenance ?? null,
       },

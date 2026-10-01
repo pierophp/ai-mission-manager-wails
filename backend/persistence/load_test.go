@@ -69,7 +69,7 @@ func TestLoadReconstructsDomainStateAndObservedSQLiteCodecs(t *testing.T) {
 	if len(state.Workspaces) != 1 || state.Workspaces[0].Repositories[0].BaseBranch != "trunk" || len(state.ImplementationQueues) != 1 || state.ImplementationQueues[0].PausedReason.Kind != "launch_failed" {
 		t.Fatalf("workspace/queue=%+v %+v", state.Workspaces, state.ImplementationQueues)
 	}
-	if state.Links[0].AttentionPolicy != nil || state.Links[0].Purpose != "to-spec" || state.Links[0].Provenance == nil || len(state.Snapshots[0].Metadata) != 1 || state.Activities[0].Changes[0].Kind != "metadata" || len(state.AuditEntries) != 1 {
+	if state.Links[0].AttentionPolicy != nil || state.Links[0].TitleAttention != nil || state.Links[0].StateAttention == nil || !*state.Links[0].StateAttention || state.Links[0].MetadataAttention == nil || !*state.Links[0].MetadataAttention || state.Links[0].Purpose != "to-spec" || state.Links[0].Provenance == nil || len(state.Snapshots[0].Metadata) != 1 || state.Activities[0].Changes[0].Kind != "metadata" || len(state.AuditEntries) != 1 {
 		t.Fatalf("external state did not round trip: %+v", state)
 	}
 }
