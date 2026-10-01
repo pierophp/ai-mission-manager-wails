@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/piero/ai-mission-manager-wails/backend/domain"
@@ -91,8 +90,8 @@ func TestLiveGitHubIssueInTemporaryDatabase(t *testing.T) {
 	}
 }
 
-// This opt-in smoke test refreshes already-linked Jira and Azure DevOps objects
-// in a temporary database copy, using the authenticated provider CLIs.
+// This opt-in smoke test refreshes persisted Jira and Azure DevOps Links after
+// reopening a temporary database copy; missing providers are seeded with fake CLIs.
 func TestLiveAtlassianAndAzureLinksInTemporaryDatabase(t *testing.T) {
 	databasePath := os.Getenv("EXTERNAL_PROVIDER_VALIDATION_DB")
 	if databasePath == "" {
@@ -102,7 +101,12 @@ func TestLiveAtlassianAndAzureLinksInTemporaryDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rt.Close()
+	defer func() {
+		if rt != nil {
+			_ = rt.Close()
+		}
+	}()
+	targets := map[domain.ExternalProvider]int64{}
 	state, err := rt.stateSnapshot()
 	if err != nil {
 		t.Fatal(err)
@@ -121,44 +125,76 @@ func TestLiveAtlassianAndAzureLinksInTemporaryDatabase(t *testing.T) {
 			}
 		}
 		if selected != 0 {
-			if _, err := rt.refreshExternalObject(selected); err != nil {
-				t.Fatalf("refresh existing %s Link failed: %v", provider, err)
-			}
-			t.Logf("refreshed existing %s Link %d from a temporary database copy", provider, selected)
+			targets[provider] = selected
+			t.Logf("found existing %s Link %d in temporary database copy", provider, selected)
 			continue
 		}
-		// Current personal DBs may not yet contain either provider. Seed a test
-		// Link in the copy and exercise persistence plus the normal refresh path.
-		if err := seedProviderLinkForSmoke(t, rt, provider); err != nil {
+		// Current personal DBs may not yet contain either provider. Persist a
+		// test Link into the disposable copy, then exercise loading and refresh
+		// from a new Runtime instance below.
+		selected, err = seedProviderLinkForSmoke(t, rt, provider)
+		if err != nil {
 			t.Fatalf("seed %s Link in temporary DB copy: %v", provider, err)
 		}
+		targets[provider] = selected
+		state, err = rt.stateSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = rt.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rt, err = OpenRuntime(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = rt.stateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for provider, objectID := range targets {
+		found := false
+		for _, link := range state.Links {
+			if link.ExternalObjectID == objectID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("reopened database did not load preexisting %s Link %d", provider, objectID)
+		}
+		if _, err := rt.refreshExternalObject(objectID); err != nil {
+			t.Fatalf("refresh preexisting %s Link %d failed: %v", provider, objectID, err)
+		}
+		t.Logf("refreshed preexisting %s Link %d after reopening the temporary database", provider, objectID)
 	}
 }
 
-func seedProviderLinkForSmoke(t *testing.T, rt *Runtime, provider domain.ExternalProvider) error {
+func seedProviderLinkForSmoke(t *testing.T, rt *Runtime, provider domain.ExternalProvider) (int64, error) {
 	t.Helper()
 	service := CommandService{Runtime: rt}
 	contextName := "Temporary provider smoke " + string(provider)
 	createdContext, err := service.Invoke("create_context", mustJSON(t, map[string]any{"name": contextName}))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var context struct {
 		ID   int64  `json:"id"`
 		Name string `json:"name"`
 	}
 	if err = json.Unmarshal(createdContext, &context); err != nil {
-		return err
+		return 0, err
 	}
 	createdProject, err := service.Invoke("create_project", mustJSON(t, map[string]any{"name": contextName, "contextId": context.ID, "defaultItemStatus": "Active"}))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var project struct {
 		ID int64 `json:"id"`
 	}
 	if err = json.Unmarshal(createdProject, &project); err != nil {
-		return err
+		return 0, err
 	}
 	executable := fakeCommand(t, "twg-smoke", filepath.Join(t.TempDir(), "twg-args"), `printf '%s' '{"key":"APP-4","summary":"Smoke Jira","status":"Open","description":"body"}'`)
 	url := "https://validation.atlassian.net/browse/APP-4"
@@ -168,13 +204,13 @@ func seedProviderLinkForSmoke(t *testing.T, rt *Runtime, provider domain.Externa
 	}
 	created, err := service.Invoke("create_item", mustJSON(t, map[string]any{"title": "Provider refresh smoke", "contextId": context.ID, "projectId": project.ID, "notes": nil}))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var item struct {
 		ID int64 `json:"id"`
 	}
 	if err = json.Unmarshal(created, &item); err != nil {
-		return err
+		return 0, err
 	}
 	configuration := defaultContextConfiguration()
 	configuration.Name = context.Name
@@ -189,29 +225,32 @@ func seedProviderLinkForSmoke(t *testing.T, rt *Runtime, provider domain.Externa
 		configuration.AzureDevOpsOrganization = stringPtr("validation")
 	}
 	if _, err = service.Invoke("update_context_configuration", mustJSON(t, map[string]any{"contextId": context.ID, "configuration": configuration})); err != nil {
-		return err
+		return 0, err
 	}
-	linked, err := service.Invoke("link_external_object", mustJSON(t, map[string]any{"itemId": item.ID, "url": url}))
+	object, err := classifyExternalURL(url)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	var action ExternalLinkAction
-	if err = json.Unmarshal(linked, &action); err != nil {
-		return err
-	}
-	if action.Link.Snapshot == nil {
-		return fmt.Errorf("test Link has no initial snapshot")
-	}
-	refreshed, err := service.Invoke("refresh_external_object", mustJSON(t, map[string]any{"externalObjectId": action.Link.Object.ID}))
+	state, err := rt.stateSnapshot()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	var snapshot domain.ExternalSnapshot
-	if err = json.Unmarshal(refreshed, &snapshot); err != nil {
-		return err
+	objectID, linkID := state.NextExternalObjectID, state.NextLinkID
+	effects := []persistence.Effect{
+		{SQL: `INSERT INTO external_objects(id,provider,kind,external_key,canonical_url) VALUES(?,?,?,?,?)`, Args: []any{objectID, object.Provider, object.Kind, object.Key, object.URL}, InsertedSequence: "next_external_object_id", InsertedID: objectID},
+		{SQL: `INSERT INTO external_snapshots(external_object_id,title,state,metadata_json,fetched_at) VALUES(?,?,?,?,?)`, Args: []any{objectID, "Before refresh", "Open", "[]", 1}},
+		{SQL: `INSERT INTO external_links(id,item_id,external_object_id,purpose,spec_external_object_id) VALUES(?,?,?,?,NULL)`, Args: []any{linkID, item.ID, objectID, "others"}, InsertedSequence: "next_link_id", InsertedID: linkID},
 	}
-	if strings.TrimSpace(snapshot.Title) == "" {
-		return fmt.Errorf("refreshed test Link has an empty title")
+	if err = rt.store.Apply(effects, nil); err != nil {
+		return 0, err
 	}
-	return nil
+	state, err = rt.store.Load()
+	if err != nil {
+		return 0, err
+	}
+	rt.mu.Lock()
+	rt.state = state
+	rt.mu.Unlock()
+	t.Logf("persisted test %s Link %d before opening refresh Runtime", provider, linkID)
+	return objectID, nil
 }
