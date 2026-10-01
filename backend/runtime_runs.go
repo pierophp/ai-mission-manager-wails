@@ -100,6 +100,17 @@ func (r *Runtime) applyAgentStateRecord(runID int64, record AgentStateRecord) (b
 }
 
 func (r *Runtime) applyAgentStateObservation(runID int64, record AgentStateRecord, generation *uint64) (bool, bool, error) {
+	accepted, changed, err := r.applyAgentStateObservationWithoutQueue(runID, record, generation)
+	if err != nil || !changed {
+		return accepted, changed, err
+	}
+	if err := r.advanceQueuesForRun(runID); err != nil {
+		return accepted, changed, err
+	}
+	return accepted, changed, nil
+}
+
+func (r *Runtime) applyAgentStateObservationWithoutQueue(runID int64, record AgentStateRecord, generation *uint64) (bool, bool, error) {
 	r.transitionMu.Lock()
 	defer r.transitionMu.Unlock()
 	r.mu.Lock()
@@ -636,6 +647,9 @@ func (r *Runtime) stopRun(runID int64) (domain.Run, error) {
 	if raw, e := json.Marshal(map[string]any{"action": "runStopped", "run_id": runID}); e == nil {
 		_ = r.store.Apply(nil, []persistence.AuditAction{persistence.AuditAction(raw)})
 	}
+	if err := r.advanceQueuesForRun(runID); err != nil {
+		return run, err
+	}
 	return run, nil
 }
 
@@ -651,6 +665,13 @@ func (r *Runtime) finishRun(runID int64) (domain.Run, error) {
 }
 
 func (r *Runtime) setRunState(runID int64, state domain.RunState, manual bool) error {
+	if err := r.setRunStateWithoutQueue(runID, state, manual); err != nil {
+		return err
+	}
+	return r.advanceQueuesForRun(runID)
+}
+
+func (r *Runtime) setRunStateWithoutQueue(runID int64, state domain.RunState, manual bool) error {
 	r.transitionMu.Lock()
 	defer r.transitionMu.Unlock()
 	r.mu.Lock()

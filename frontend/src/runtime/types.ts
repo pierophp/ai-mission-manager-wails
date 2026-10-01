@@ -432,6 +432,7 @@ export type ImplementationQueue = {
   workspaceId: number;
   repositoryId: number;
   configuration: GrillConfiguration;
+  workflow?: Workflow;
   allowDirty: boolean;
   allowSharedCheckouts: boolean;
   entries: ImplementationQueueStart["entries"];

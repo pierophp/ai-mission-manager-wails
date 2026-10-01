@@ -92,6 +92,42 @@ var commandHandlers = map[string]commandHandler{
 		}
 		return s.Runtime.launchRun(a.Request)
 	}),
+	"check_implementation_queue": withArgs([]string{"queueId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			QueueID int64 `json:"queueId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.checkImplementationQueue(a.QueueID)
+	}),
+	"skip_implementation_queue_entry": withArgs([]string{"queueId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			QueueID int64 `json:"queueId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.skipImplementationQueueEntry(a.QueueID)
+	}),
+	"cancel_implementation_queue": withArgs([]string{"queueId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			QueueID int64 `json:"queueId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.cancelImplementationQueue(a.QueueID)
+	}),
 	"reconcile_runs": noArgs(func(s *CommandService) (any, error) {
 		if !writable(s) {
 			return nil, errors.New("runtime is not configured")
@@ -1043,6 +1079,7 @@ var commandHandlers = map[string]commandHandler{
 var registeredCommandArguments = map[string][]string{
 	"compose_run_prompt": {"itemId", "executionProfile", "promptSelection", "language", "initialPrompt", "workflow"}, "get_run_launch_options": {"itemId", "target"}, "prepare_direct_run": {"itemId", "workspaceId", "machineId"}, "compose_grill_prompt": {"itemId", "configuration", "language", "initialPrompt"}, "prepare_grill_run": {"itemId", "workspaceId", "machineId"}, "start_run": {"request"},
 	"reconcile_runs": {}, "stop_run": {"runId"}, "finish_run": {"runId"}, "delete_run": {"runId", "confirmed"}, "list_run_suggestions": {}, "attach_run": {"suggestion"}, "stop_untracked_agent": {"suggestion"}, "delete_untracked_agent": {"suggestion"},
+	"check_implementation_queue": {"queueId"}, "skip_implementation_queue_entry": {"queueId"}, "cancel_implementation_queue": {"queueId"},
 	"get_setup_state": {}, "complete_setup": {"contextName", "provider"}, "get_health_status": {"provider"},
 	"list_contexts": {}, "new_context_configuration": {}, "list_context_attention_defaults": {}, "list_projects": {}, "list_repositories": {}, "list_repository_locations": {}, "list_audit_history": {}, "get_activity_tab": {}, "list_grill_model_catalog": {}, "refresh_grill_model_catalog": {}, "list_plan_usage": {}, "refresh_plan_usage": {},
 	"create_context": {"name"}, "create_context_configuration": {"configuration"}, "update_context": {"contextId", "name"}, "update_context_configuration": {"contextId", "configuration"},

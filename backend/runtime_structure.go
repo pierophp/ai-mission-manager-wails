@@ -295,6 +295,16 @@ func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persis
 			dbEffect, runAudit := startedRunPersistence(*effect.Run)
 			out = append(out, dbEffect)
 			audit = append(audit, runAudit)
+		case "persist_implementation_queue":
+			queue := effect.ImplementationQueue
+			if queue == nil {
+				return nil, nil, errors.New("Implementation Queue effect has no queue")
+			}
+			encoded, err := json.Marshal(queue)
+			if err != nil {
+				return nil, nil, fmt.Errorf("encode Implementation Queue: %w", err)
+			}
+			out = append(out, persistence.Effect{SQL: `INSERT INTO implementation_queues(id,item_id,queue_json) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET item_id=excluded.item_id,queue_json=excluded.queue_json`, Args: []any{queue.ID, queue.ItemID, string(encoded)}})
 		case "external_object_refreshed":
 			audit = append(audit, auditJSON("externalObjectRefreshed", "external_object_id", effect.ExternalObjectID))
 		default:

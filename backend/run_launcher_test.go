@@ -17,12 +17,13 @@ import (
 )
 
 type fakeAgentRunExecutor struct {
-	runtime   *Runtime
-	launched  []string
-	released  []string
-	killed    []string
-	launchErr error
-	onLaunch  func() error
+	runtime    *Runtime
+	launched   []string
+	released   []string
+	killed     []string
+	launchErr  error
+	releaseErr error
+	onLaunch   func() error
 }
 
 func TestGatedAgentCommandPreservesIdentityProfileAndCodexEffort(t *testing.T) {
@@ -64,6 +65,9 @@ func (f *fakeAgentRunExecutor) Release(_ domain.Machine, gate string) error {
 		if !found {
 			return errors.New("gate was released before Run commit")
 		}
+	}
+	if f.releaseErr != nil {
+		return f.releaseErr
 	}
 	f.released = append(f.released, gate)
 	return nil
@@ -296,5 +300,150 @@ func runGitTestAt(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+}
+
+func TestImplementationQueueAdvancesTwoTicketsAfterFinishedRun(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	remote, seed, checkout := filepath.Join(root, "origin.git"), filepath.Join(root, "seed"), filepath.Join(root, "checkout")
+	runGitTest(t, "init", "--bare", "--initial-branch=main", remote)
+	runGitTest(t, "init", "--initial-branch=main", seed)
+	runGitTestAt(t, seed, "config", "user.name", "Test")
+	runGitTestAt(t, seed, "config", "user.email", "test@example.invalid")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTestAt(t, seed, "add", "README.md")
+	runGitTestAt(t, seed, "commit", "-m", "initial")
+	runGitTestAt(t, seed, "remote", "add", "origin", remote)
+	runGitTestAt(t, seed, "push", "-u", "origin", "main")
+	runGitTest(t, "clone", remote, checkout)
+	runtime, err := OpenRuntime(filepath.Join(root, "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	service := CommandService{Runtime: runtime}
+	call := func(command string, args any) json.RawMessage {
+		t.Helper()
+		raw, e := service.Invoke(command, mustJSON(t, args))
+		if e != nil {
+			t.Fatalf("%s: %v", command, e)
+		}
+		return raw
+	}
+	call("register_machine", map[string]any{"contextId": 1, "name": "Local", "socketName": "queue-test", "transport": map[string]any{"kind": "local"}})
+	call("set_context_execution_machine", map[string]any{"contextId": 1, "machineId": 1})
+	call("register_repository_at_location", map[string]any{"projectId": 1, "name": "app", "remoteUrl": remote, "baseBranch": "main", "machineId": 1, "checkoutPath": checkout, "worktreeRoot": filepath.Join(root, "worktrees"), "cloneIntoDestination": false})
+	call("create_item", map[string]any{"title": "Queue fixture", "contextId": 1, "projectId": 1, "notes": ""})
+	spec := domain.ExternalObject{Provider: domain.ProviderGitHub, Kind: domain.ObjectIssue, ExternalKey: "issue:acme/app#44", CanonicalURL: "https://github.com/acme/app/issues/44"}
+	if _, err := runtime.transition(domain.Event{Kind: "link_external_object", ItemID: 1, ExternalObject: &spec}); err != nil {
+		t.Fatal(err)
+	}
+	linkedState, err := runtime.stateSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var specID int64
+	for _, object := range linkedState.ExternalObjects {
+		if object.ExternalKey == spec.ExternalKey {
+			specID = object.ID
+			break
+		}
+	}
+	var linkID int64
+	for _, link := range linkedState.Links {
+		if link.ItemID == 1 && link.ExternalObjectID == specID {
+			linkID = link.ID
+			break
+		}
+	}
+	if linkID == 0 || specID == 0 {
+		t.Fatal("Spec link was not created")
+	}
+	if _, err := runtime.runEvent(domain.Event{Kind: "set_link_purpose", LinkID: linkID, Purpose: domain.LinkPurpose("to-spec")}); err != nil {
+		t.Fatal(err)
+	}
+	setTestWorkspaceBranch(t, runtime, "main")
+	previewRaw := call("prepare_direct_run", map[string]any{"itemId": 1, "workspaceId": 1, "machineId": 1})
+	var preview DirectRunPreview
+	if err := json.Unmarshal(previewRaw, &preview); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeAgentRunExecutor{runtime: runtime}
+	runtime.setRunExecutor(fake)
+	ticketState := "OPEN"
+	runtime.implementationQueueTicketState = func(_ domain.DomainState, _ domain.Context, url string) (string, error) { return ticketState, nil }
+	request := map[string]any{"itemId": 1, "workspaceId": 1, "strategy": map[string]any{
+		"kind": "direct", "machineId": 1, "primaryRepositoryId": 1, "agent": "claude",
+		"configuration":    map[string]any{"agent": "claude", "model": "claude-sonnet-5", "effort": "high"},
+		"executionProfile": "implement", "workflow": "matt-pocock", "prompt": "Implementation Queue",
+		"promptSelection":   map[string]any{"includeObjective": true, "externalObjectIds": []int64{}},
+		"expectedCheckouts": preview.Checkouts, "allowDirty": false, "allowSharedCheckouts": false,
+		"implementation_queue": map[string]any{"specExternalObjectId": specID, "specUrl": "https://github.com/acme/app/issues/44", "entries": []any{
+			map[string]any{"position": 0, "ticketNumber": 101, "ticketTitle": "First", "ticketUrl": "https://github.com/acme/app/issues/101", "ticketState": "OPEN", "runId": nil, "done": false, "skipped": false},
+			map[string]any{"position": 1, "ticketNumber": 102, "ticketTitle": "Second", "ticketUrl": "https://github.com/acme/app/issues/102", "ticketState": "OPEN", "runId": nil, "done": false, "skipped": false},
+		}},
+	}}
+	var first domain.Run
+	if err := json.Unmarshal(call("start_run", map[string]any{"request": request}), &first); err != nil {
+		t.Fatal(err)
+	}
+	queue := runtime.queueCopy(first.ID)
+	if queue.ID != first.ID || len(queue.Entries) != 2 || queue.Entries[0].RunID == nil || *queue.Entries[0].RunID != first.ID || !strings.Contains(first.Prompt, "Ticket #101") {
+		t.Fatalf("initial queue/run = %#v / %#v", queue, first)
+	}
+	sequence := int64(1)
+	record := AgentStateRecord{Agent: domain.AgentClaude, RunID: fmtRunID(first.ID), State: domain.RunWorking, UpdatedAt: "now", Sequence: &sequence}
+	if _, changed, err := runtime.applyAgentStateRecord(first.ID, record); err != nil || !changed {
+		t.Fatalf("working queue Run: changed=%v err=%v", changed, err)
+	}
+	sequence++
+	record.State = domain.RunFinished
+	if _, changed, err := runtime.applyAgentStateRecord(first.ID, record); err != nil || !changed {
+		t.Fatalf("finished queue Run: changed=%v err=%v", changed, err)
+	}
+	queue = runtime.queueCopy(first.ID)
+	if queue.PausedReason == nil || queue.PausedReason.Kind != "ticket_still_open" || queue.Entries[0].Done || len(fake.released) != 1 {
+		t.Fatalf("open ticket should pause queue: %#v released=%v", queue, fake.released)
+	}
+	ticketState = "CLOSED"
+	dirtyFile := filepath.Join(checkout, "agent-output.txt")
+	if err := os.WriteFile(dirtyFile, []byte("changes need review\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	call("check_implementation_queue", map[string]any{"queueId": first.ID})
+	queue = runtime.queueCopy(first.ID)
+	if queue.PausedReason == nil || queue.PausedReason.Kind != "checkout_dirty" || queue.Entries[0].Done {
+		t.Fatalf("dirty checkout should pause queue: %#v", queue)
+	}
+	if err := os.Remove(dirtyFile); err != nil {
+		t.Fatal(err)
+	}
+	fake.releaseErr = errors.New("gate release failed")
+	call("check_implementation_queue", map[string]any{"queueId": first.ID})
+	queue = runtime.queueCopy(first.ID)
+	if queue.Entries[0].TicketState != "CLOSED" || !queue.Entries[0].Done || queue.Entries[1].RunID == nil || *queue.Entries[1].RunID != 2 || !queue.Active || queue.PausedReason == nil || queue.PausedReason.Kind != "launch_failed" {
+		t.Fatalf("failed second Run was not attached and paused: %#v", queue)
+	}
+	second := runtime.runCopy(2)
+	if second.ID != 2 || !strings.Contains(second.Prompt, "Ticket #102") || len(fake.released) != 1 || len(fake.killed) != 1 {
+		t.Fatalf("second Run=%#v released=%v killed=%v", second, fake.released, fake.killed)
+	}
+	fake.releaseErr = nil
+	call("check_implementation_queue", map[string]any{"queueId": first.ID})
+	queue = runtime.queueCopy(first.ID)
+	if len(runtime.domainSnapshot().Runs) != 2 || queue.Entries[1].RunID == nil || *queue.Entries[1].RunID != 2 {
+		t.Fatalf("checking a failed release launched a duplicate Run: runs=%#v queue=%#v", runtime.domainSnapshot().Runs, queue)
+	}
+	queue.PausedReason = &domain.ImplementationQueuePauseReason{Kind: "ticket_still_open"}
+	if err := runtime.updateImplementationQueue(queue); err != nil {
+		t.Fatal(err)
+	}
+	call("skip_implementation_queue_entry", map[string]any{"queueId": first.ID})
+	queue = runtime.queueCopy(first.ID)
+	if queue.Active || !queue.Entries[1].Skipped || len(fake.killed) != 2 {
+		t.Fatalf("skip did not close the final Run and finish queue: %#v killed=%v", queue, fake.killed)
 	}
 }

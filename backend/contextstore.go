@@ -19,32 +19,34 @@ type ContextReader interface {
 // adapters. The first tracer operation reads Contexts from its persistence
 // seam; later operations extend this shared runtime.
 type Runtime struct {
-	contexts                    ContextReader
-	mu                          sync.Mutex
-	runLaunchMu                 sync.Mutex
-	runExecutor                 agentRunExecutor
-	terminalMu                  sync.Mutex
-	terminalConnections         map[string]terminalSession
-	terminalGenerations         map[string]uint64
-	terminalOpen                terminalOpenFunc
-	grillOperations             map[int64]*sync.Mutex
-	grillTerminal               grillPaneTerminal
-	runObservationGeneration    map[int64]uint64
-	runReconciliationInProgress bool
-	transitionMu                sync.Mutex
-	state                       domain.DomainState
-	store                       *persistence.Store
-	events                      EventEmitter
-	machineAccess               MachineAccess
-	machineChecker              MachineCheckFunc
-	machineReadiness            map[int64]MachineReadiness
-	machineCheckGenerations     map[int64]uint64
-	pendingWorktreeRemovals     map[int64]pendingWorktreeRemoval
-	backgroundMu                sync.Mutex
-	planUsageRefreshing         bool
-	planUsageLastAttempt        int64
-	catalogRefreshing           bool
-	catalogLastAttempt          int64
+	contexts                       ContextReader
+	mu                             sync.Mutex
+	runLaunchMu                    sync.Mutex
+	implementationQueueMu          sync.Mutex
+	implementationQueueTicketState func(domain.DomainState, domain.Context, string) (string, error)
+	runExecutor                    agentRunExecutor
+	terminalMu                     sync.Mutex
+	terminalConnections            map[string]terminalSession
+	terminalGenerations            map[string]uint64
+	terminalOpen                   terminalOpenFunc
+	grillOperations                map[int64]*sync.Mutex
+	grillTerminal                  grillPaneTerminal
+	runObservationGeneration       map[int64]uint64
+	runReconciliationInProgress    bool
+	transitionMu                   sync.Mutex
+	state                          domain.DomainState
+	store                          *persistence.Store
+	events                         EventEmitter
+	machineAccess                  MachineAccess
+	machineChecker                 MachineCheckFunc
+	machineReadiness               map[int64]MachineReadiness
+	machineCheckGenerations        map[int64]uint64
+	pendingWorktreeRemovals        map[int64]pendingWorktreeRemoval
+	backgroundMu                   sync.Mutex
+	planUsageRefreshing            bool
+	planUsageLastAttempt           int64
+	catalogRefreshing              bool
+	catalogLastAttempt             int64
 }
 
 func NewRuntime(contexts ContextReader) *Runtime {

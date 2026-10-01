@@ -56,6 +56,9 @@ type Event struct {
 	StateFingerprint     string
 	Worktree             *Worktree
 	Run                  *Run
+	ImplementationQueue  *ImplementationQueue
+	QueueID              int64
+	QueueAction          string
 	WorkspaceID          int64
 	WorktreeID           int64
 	DestructiveConfirmed bool
@@ -83,25 +86,26 @@ type ContextConfiguration struct {
 }
 
 type Effect struct {
-	Kind               EffectKind
-	Context            *Context
-	Project            *Project
-	Machine            *Machine
-	CLIProfile         *CLIConfigurationProfile
-	Item               *Item
-	Relation           *ItemRelation
-	Repository         *Repository
-	RepositoryLocation *RepositoryLocation
-	PreviousMachineID  *int64
-	AttentionDefaults  []ContextAttentionDefault
-	Workspace          *Workspace
-	Worktree           *Worktree
-	Run                *Run
-	ExternalObject     *ExternalObject
-	ExternalLink       *Link
-	ExternalSnapshot   *ExternalSnapshot
-	ExternalActivity   *Activity
-	ExternalObjectID   int64
+	Kind                EffectKind
+	Context             *Context
+	Project             *Project
+	Machine             *Machine
+	CLIProfile          *CLIConfigurationProfile
+	Item                *Item
+	Relation            *ItemRelation
+	Repository          *Repository
+	RepositoryLocation  *RepositoryLocation
+	PreviousMachineID   *int64
+	AttentionDefaults   []ContextAttentionDefault
+	Workspace           *Workspace
+	Worktree            *Worktree
+	Run                 *Run
+	ImplementationQueue *ImplementationQueue
+	ExternalObject      *ExternalObject
+	ExternalLink        *Link
+	ExternalSnapshot    *ExternalSnapshot
+	ExternalActivity    *Activity
+	ExternalObjectID    int64
 }
 
 type Decision struct {

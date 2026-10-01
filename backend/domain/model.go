@@ -245,6 +245,7 @@ type ImplementationQueue struct {
 	WorkspaceID          int64                           `json:"workspaceId"`
 	RepositoryID         int64                           `json:"repositoryId"`
 	Configuration        GrillConfiguration              `json:"configuration"`
+	Workflow             Workflow                        `json:"workflow"`
 	AllowDirty           bool                            `json:"allowDirty"`
 	AllowSharedCheckouts bool                            `json:"allowSharedCheckouts"`
 	Entries              []ImplementationQueueEntry      `json:"entries"`

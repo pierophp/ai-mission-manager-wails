@@ -23,19 +23,20 @@ type runLaunchRequest struct {
 	Strategy    runLaunchStrategy `json:"strategy"`
 }
 type runLaunchStrategy struct {
-	Kind                 string                     `json:"kind"`
-	MachineID            *int64                     `json:"machineId"`
-	PrimaryRepositoryID  int64                      `json:"primaryRepositoryId"`
-	Agent                domain.AgentKind           `json:"agent"`
-	Configuration        *domain.GrillConfiguration `json:"configuration"`
-	ExecutionProfile     domain.ExecutionProfile    `json:"executionProfile"`
-	Workflow             domain.Workflow            `json:"workflow"`
-	Prompt               string                     `json:"prompt"`
-	PromptSelection      domain.RunPromptSelection  `json:"promptSelection"`
-	ExpectedCheckouts    []domain.RunCheckout       `json:"expectedCheckouts"`
-	AllowDirty           bool                       `json:"allowDirty"`
-	AllowSharedCheckouts bool                       `json:"allowSharedCheckouts"`
-	WorktreeID           int64                      `json:"worktreeId"`
+	Kind                 string                           `json:"kind"`
+	MachineID            *int64                           `json:"machineId"`
+	PrimaryRepositoryID  int64                            `json:"primaryRepositoryId"`
+	Agent                domain.AgentKind                 `json:"agent"`
+	Configuration        *domain.GrillConfiguration       `json:"configuration"`
+	ExecutionProfile     domain.ExecutionProfile          `json:"executionProfile"`
+	Workflow             domain.Workflow                  `json:"workflow"`
+	Prompt               string                           `json:"prompt"`
+	PromptSelection      domain.RunPromptSelection        `json:"promptSelection"`
+	ExpectedCheckouts    []domain.RunCheckout             `json:"expectedCheckouts"`
+	AllowDirty           bool                             `json:"allowDirty"`
+	AllowSharedCheckouts bool                             `json:"allowSharedCheckouts"`
+	WorktreeID           int64                            `json:"worktreeId"`
+	ImplementationQueue  *domain.ImplementationQueueStart `json:"implementation_queue,omitempty"`
 }
 
 // UnmarshalJSON accepts the snake_case strategy nested in the existing
@@ -54,7 +55,7 @@ func (s *runLaunchStrategy) UnmarshalJSON(data []byte) error {
 	allowed := map[string]bool{
 		"kind": true, "machineId": true, "machine_id": true,
 		"primaryRepositoryId": true, "primary_repository_id": true,
-		"agent": true, "configuration": true, "implementation_queue": true,
+		"agent": true, "configuration": true, "implementation_queue": true, "implementationQueue": true,
 		"executionProfile": true, "execution_profile": true,
 		"workflow": true, "prompt": true, "promptSelection": true,
 		"prompt_selection": true, "expectedCheckouts": true,
@@ -91,8 +92,11 @@ func (s *runLaunchStrategy) UnmarshalJSON(data []byte) error {
 	if err := unmarshalLaunchStrategyAlias(fields, "worktree_id", &strategy.WorktreeID); err != nil {
 		return err
 	}
-	if raw := fields["implementation_queue"]; len(raw) > 0 && string(raw) != "null" {
-		return errors.New("implementation_queue is not supported by this launcher")
+	if err := unmarshalLaunchStrategyAlias(fields, "implementation_queue", &strategy.ImplementationQueue); err != nil {
+		return err
+	}
+	if err := unmarshalLaunchStrategyAlias(fields, "implementationQueue", &strategy.ImplementationQueue); err != nil {
+		return err
 	}
 	*s = runLaunchStrategy(strategy)
 	return nil
@@ -363,6 +367,20 @@ func (r *Runtime) launchRun(request runLaunchRequest) (domain.Run, error) {
 	if !ok {
 		return domain.Run{}, fmt.Errorf("Context %d does not exist", project.ContextID)
 	}
+	if strategy.ImplementationQueue != nil {
+		if strategy.Kind != "direct" || strategy.Configuration == nil || strategy.ExecutionProfile != domain.ExecutionProfileImplement || strategy.Workflow != domain.WorkflowMattPocock {
+			return domain.Run{}, errors.New("Implementation Queue requires a configured Matt Pocock Implement Run")
+		}
+		queue, err := domain.CreateImplementationQueue(state, state.NextRunID, request.ItemID, request.WorkspaceID, strategy.PrimaryRepositoryID, *strategy.Configuration, strategy.AllowDirty, strategy.AllowSharedCheckouts, *strategy.ImplementationQueue)
+		if err != nil {
+			return domain.Run{}, err
+		}
+		first := domain.CurrentImplementationQueueEntry(&queue)
+		if first == nil {
+			return domain.Run{}, errors.New("Implementation Queue requires at least one Ticket")
+		}
+		strategy.Prompt = domain.ComposeImplementationQueuePrompt(first.TicketNumber, first.TicketURL, strategy.ImplementationQueue.SpecURL)
+	}
 	workspace, ok := workspaceByID(state, request.WorkspaceID)
 	if !ok || workspace.ItemID != item.ID {
 		return domain.Run{}, fmt.Errorf("Workspace %d does not belong to Item %d", request.WorkspaceID, item.ID)
@@ -622,7 +640,17 @@ func (r *Runtime) launchRun(request runLaunchRequest) (domain.Run, error) {
 	if strategy.Workflow == domain.WorkflowPstack {
 		run.Workflow = domain.WorkflowPstack
 	}
-	decision, decideErr := domain.Decide(latest, domain.Event{Kind: "start_run", Run: &run})
+	var queue *domain.ImplementationQueue
+	if start := strategy.ImplementationQueue; start != nil {
+		created, createErr := domain.CreateImplementationQueue(latest, run.ID, item.ID, workspace.ID, strategy.PrimaryRepositoryID, *strategy.Configuration, strategy.AllowDirty, strategy.AllowSharedCheckouts, *start)
+		if createErr != nil {
+			r.transitionMu.Unlock()
+			return cleanup(fmt.Errorf("could not record Implementation Queue: %w", createErr))
+		}
+		created.Workflow = strategy.Workflow
+		queue = &created
+	}
+	decision, decideErr := domain.Decide(latest, domain.Event{Kind: "start_run", Run: &run, ImplementationQueue: queue})
 	if decideErr != nil {
 		r.transitionMu.Unlock()
 		return cleanup(fmt.Errorf("could not record Run: %w", decideErr))
@@ -633,7 +661,7 @@ func (r *Runtime) launchRun(request runLaunchRequest) (domain.Run, error) {
 	}
 	r.transitionMu.Unlock()
 	if err := executor.Release(machine, gate); err != nil {
-		return domain.Run{}, fmt.Errorf("Run %d is recorded but the agent was not released: %w", run.ID, err)
+		return run, fmt.Errorf("Run %d is recorded but the agent was not released: %w", run.ID, err)
 	}
 	return run, nil
 }

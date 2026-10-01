@@ -19,8 +19,5 @@
   "prepare_machine_deletion",
   "delete_machine",
   "prepare_item_deletion",
-  "delete_item",
-  "check_implementation_queue",
-  "skip_implementation_queue_entry",
-  "cancel_implementation_queue"
+  "delete_item"
 ]

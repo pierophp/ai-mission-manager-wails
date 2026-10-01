@@ -42,6 +42,37 @@ func Decide(input DomainState, event Event) (Decision, error) {
 	state := cloneState(input)
 	clean := func(value string) string { return strings.TrimSpace(value) }
 	switch event.Kind {
+	case "implementation_queue_action":
+		updated, err := ApplyImplementationQueueAction(state, event.QueueID, event.QueueAction)
+		if err != nil {
+			return Decision{}, err
+		}
+		var queue *ImplementationQueue
+		for i := range updated.ImplementationQueues {
+			if updated.ImplementationQueues[i].ID == event.QueueID {
+				value := updated.ImplementationQueues[i]
+				queue = &value
+				break
+			}
+		}
+		return Decision{State: updated, Effects: []Effect{{Kind: "persist_implementation_queue", ImplementationQueue: queue}}}, nil
+	case "implementation_queue_update":
+		if event.ImplementationQueue == nil || event.ImplementationQueue.ID < 1 {
+			return Decision{}, DomainError("Implementation Queue is required")
+		}
+		found := false
+		for i := range state.ImplementationQueues {
+			if state.ImplementationQueues[i].ID == event.ImplementationQueue.ID {
+				state.ImplementationQueues[i] = *event.ImplementationQueue
+				found = true
+				break
+			}
+		}
+		if !found {
+			return Decision{}, DomainError(fmt.Sprintf("Implementation Queue %d does not exist", event.ImplementationQueue.ID))
+		}
+		queue := *event.ImplementationQueue
+		return Decision{State: state, Effects: []Effect{{Kind: "persist_implementation_queue", ImplementationQueue: &queue}}}, nil
 	case "start_run":
 		if event.Run == nil {
 			return Decision{}, DomainError("a Run is required")
@@ -60,7 +91,26 @@ func Decide(input DomainState, event Event) (Decision, error) {
 		}
 		state.Runs = append(state.Runs, run)
 		state.NextRunID++
-		return Decision{State: state, Effects: []Effect{{Kind: "persist_run", Run: &run}}}, nil
+		effects := []Effect{{Kind: "persist_run", Run: &run}}
+		if event.ImplementationQueue != nil {
+			provided := *event.ImplementationQueue
+			if provided.ID != run.ID || provided.ItemID != run.ItemID || !provided.Active || provided.Workflow != run.Workflow || run.ExecutionProfile != ExecutionProfileImplement || provided.WorkspaceID < 1 || provided.RepositoryID < 1 || run.WorkspaceID == nil || *run.WorkspaceID != provided.WorkspaceID || run.RepositoryID == nil || *run.RepositoryID != provided.RepositoryID || run.Model == nil || *run.Model != provided.Configuration.Model || run.Effort == nil || *run.Effort != provided.Configuration.Effort || run.Agent != provided.Configuration.Agent {
+				return Decision{}, DomainError("Implementation Queue must match its first Implement Run and launch configuration")
+			}
+			queue, err := CreateImplementationQueue(state, run.ID, provided.ItemID, provided.WorkspaceID, provided.RepositoryID, provided.Configuration, provided.AllowDirty, provided.AllowSharedCheckouts, ImplementationQueueStart{SpecExternalObjectID: provided.SpecExternalObjectID, SpecURL: provided.SpecURL, Entries: provided.Entries})
+			if err != nil {
+				return Decision{}, err
+			}
+			queue.Workflow = provided.Workflow
+			first := CurrentImplementationQueueEntry(&queue)
+			if first == nil {
+				return Decision{}, DomainError("Implementation Queue must contain a first Ticket")
+			}
+			first.RunID = &run.ID
+			state.ImplementationQueues = append(state.ImplementationQueues, queue)
+			effects = append(effects, Effect{Kind: "persist_implementation_queue", ImplementationQueue: &queue})
+		}
+		return Decision{State: state, Effects: effects}, nil
 	case "create_context":
 		name := clean(event.Name)
 		if name == "" {
