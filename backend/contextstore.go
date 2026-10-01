@@ -21,6 +21,10 @@ type ContextReader interface {
 type Runtime struct {
 	contexts                ContextReader
 	mu                      sync.Mutex
+	terminalMu              sync.Mutex
+	terminalConnections     map[string]terminalSession
+	terminalGenerations     map[string]uint64
+	terminalOpen            terminalOpenFunc
 	transitionMu            sync.Mutex
 	state                   domain.DomainState
 	store                   *persistence.Store
@@ -91,7 +95,7 @@ func OpenDefaultRuntime() (*Runtime, error) {
 
 func newRuntime(contexts ContextReader, store *persistence.Store, state domain.DomainState, access MachineAccess) *Runtime {
 	tmux := TmuxTerminalRuntime{Access: access}
-	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}, pendingWorktreeRemovals: map[int64]pendingWorktreeRemoval{}}
+	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}, pendingWorktreeRemovals: map[int64]pendingWorktreeRemoval{}, terminalConnections: map[string]terminalSession{}, terminalGenerations: map[string]uint64{}}
 }
 
 // SetMachineAdapters replaces the local adapters, primarily for dispatcher
@@ -137,7 +141,21 @@ func (r *Runtime) EmitEvent(name string, payload any) {
 }
 
 func (r *Runtime) Close() error {
-	if r == nil || r.store == nil {
+	if r == nil {
+		return nil
+	}
+	r.terminalMu.Lock()
+	connections := make([]terminalConnection, 0, len(r.terminalConnections))
+	for terminalID, session := range r.terminalConnections {
+		r.terminalGenerations[terminalID]++
+		connections = append(connections, session.connection)
+		delete(r.terminalConnections, terminalID)
+	}
+	r.terminalMu.Unlock()
+	for _, connection := range connections {
+		_ = connection.close()
+	}
+	if r.store == nil {
 		return nil
 	}
 	return r.store.Close()

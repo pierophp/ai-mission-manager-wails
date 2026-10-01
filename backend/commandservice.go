@@ -757,6 +757,69 @@ var commandHandlers = map[string]commandHandler{
 		return s.Runtime.deleteExternalObject(a.ExternalObjectID, a.Confirmed, a.StateFingerprint)
 	}),
 	"poll_external_objects": noArgs(func(s *CommandService) (any, error) { return s.Runtime.pollExternalObjects() }),
+	"open_terminal": withArgs([]string{"runId", "terminalId", "sessionName", "paneId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			RunID       int64  `json:"runId"`
+			TerminalID  string `json:"terminalId"`
+			SessionName string `json:"sessionName"`
+			PaneID      string `json:"paneId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.openTerminal(a.RunID, a.TerminalID, a.SessionName, a.PaneID)
+	}),
+	"terminal_input": withArgs([]string{"terminalId", "input"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			TerminalID string `json:"terminalId"`
+			Input      []int  `json:"input"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return nil, s.Runtime.terminalInput(a.TerminalID, a.Input)
+	}),
+	"terminal_resize": withArgs([]string{"terminalId", "columns", "rows"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			TerminalID string `json:"terminalId"`
+			Columns    int    `json:"columns"`
+			Rows       int    `json:"rows"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return nil, s.Runtime.terminalResize(a.TerminalID, a.Columns, a.Rows)
+	}),
+	"close_terminal": withArgs([]string{"terminalId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			TerminalID string `json:"terminalId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		return nil, s.Runtime.closeTerminal(a.TerminalID)
+	}),
+	"open_external_terminal": withArgs([]string{"runId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			RunID int64 `json:"runId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return nil, s.Runtime.openExternalTerminal(a.RunID)
+	}),
 }
 
 var registeredCommandArguments = map[string][]string{
@@ -768,6 +831,7 @@ var registeredCommandArguments = map[string][]string{
 	"register_repository": {"projectId", "name", "remoteUrl"}, "update_repository": {"repositoryId", "name", "remoteUrl", "baseBranch"}, "register_repository_at_location": {"projectId", "name", "remoteUrl", "baseBranch", "machineId", "checkoutPath", "worktreeRoot", "cloneIntoDestination"}, "update_repository_location": {"repositoryId", "previousMachineId", "machineId", "checkoutPath", "worktreeRoot"},
 	"create_worktree": {"workspaceId", "repositoryId", "machineId", "path", "branch", "baseBranch"}, "prepare_worktree": {"workspaceId", "repositoryId", "machineId", "reuseExistingBranch", "confirmDirtyAttachment"}, "attach_worktree": {"workspaceId", "repositoryId", "machineId", "path", "confirmDirtyAttachment"}, "prepare_worktree_removal": {"worktreeId"}, "remove_worktree": {"worktreeId", "confirmed", "destructiveConfirmed"},
 	"get_home": {"contextId", "now"}, "search_items_command": {"query", "contextId"}, "list_inbox_items": {}, "create_item": {"title", "contextId", "projectId", "notes"}, "set_item_status": {"itemId", "status"}, "set_item_title": {"itemId", "title"}, "set_item_notes": {"itemId", "notes"}, "add_item_reminder": {"itemId", "remindAt"}, "remove_item_reminder": {"itemId", "reminderId"}, "set_item_relation": {"fromItemId", "toItemId", "kind"},
+	"open_terminal": {"runId", "terminalId", "sessionName", "paneId"}, "terminal_input": {"terminalId", "input"}, "terminal_resize": {"terminalId", "columns", "rows"}, "close_terminal": {"terminalId"}, "open_external_terminal": {"runId"},
 	"link_external_object": {"itemId", "url"}, "create_github_issue": {"itemId", "repositoryId", "title", "body"}, "add_external_comment": {"linkId", "body"}, "fetch_issue_document": {"externalObjectId"}, "fetch_external_comments": {"externalObjectId"}, "fetch_external_document": {"externalObjectId"}, "refresh_external_object": {"externalObjectId"}, "poll_external_objects": {},
 	"set_link_attention_policy": {"linkId", "policy"}, "set_link_purpose": {"linkId", "purpose", "specExternalObjectId"}, "set_link_watch_until": {"linkId", "watchUntil"}, "set_link_review_at": {"linkId", "reviewAt"}, "clear_link_review_at": {"linkId"}, "mark_link_reviewed": {"linkId"}, "unlink_external_link": {"linkId", "confirmed"}, "prepare_external_object_deletion": {"externalObjectId"}, "delete_external_object": {"externalObjectId", "confirmed", "stateFingerprint"},
 }
