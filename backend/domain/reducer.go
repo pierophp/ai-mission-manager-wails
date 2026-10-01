@@ -1123,6 +1123,12 @@ func workspacePreparationState(state DomainState, workspaceID int64, previous Wo
 	return WorkspacePending
 }
 
+// RecomputeWorkspacePreparationState exposes the reducer's derived state to
+// persistence adapters that apply the same Worktree cleanup outside Decide.
+func RecomputeWorkspacePreparationState(state DomainState, workspaceID int64, previous WorkspacePreparationState) WorkspacePreparationState {
+	return workspacePreparationState(state, workspaceID, previous)
+}
+
 func contextIndex(state DomainState, id int64) int {
 	for i, context := range state.Contexts {
 		if context.ID == id {

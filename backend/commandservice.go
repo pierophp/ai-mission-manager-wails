@@ -933,6 +933,123 @@ var commandHandlers = map[string]commandHandler{
 		}
 		return s.Runtime.unlinkExternalLink(a.LinkID, a.Confirmed)
 	}),
+	"prepare_project_deletion": withArgs([]string{"projectId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ProjectID int64 `json:"projectId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.prepareProjectDeletion(a.ProjectID)
+	}),
+	"delete_project": withArgs([]string{"projectId", "itemIds", "repositoryIds", "workspaceIds", "confirmed"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ProjectID     int64   `json:"projectId"`
+			ItemIDs       []int64 `json:"itemIds"`
+			RepositoryIDs []int64 `json:"repositoryIds"`
+			WorkspaceIDs  []int64 `json:"workspaceIds"`
+			Confirmed     bool    `json:"confirmed"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.deleteProject(a.ProjectID, a.ItemIDs, a.RepositoryIDs, a.WorkspaceIDs, a.Confirmed)
+	}),
+	"prepare_context_deletion": withArgs([]string{"contextId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ContextID int64 `json:"contextId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.prepareContextDeletion(a.ContextID)
+	}),
+	"delete_context": withArgs([]string{"contextId", "projectIds", "itemIds", "repositoryIds", "workspaceIds", "machineIds", "confirmed"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ContextID     int64   `json:"contextId"`
+			ProjectIDs    []int64 `json:"projectIds"`
+			ItemIDs       []int64 `json:"itemIds"`
+			RepositoryIDs []int64 `json:"repositoryIds"`
+			WorkspaceIDs  []int64 `json:"workspaceIds"`
+			MachineIDs    []int64 `json:"machineIds"`
+			Confirmed     bool    `json:"confirmed"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.deleteContext(a.ContextID, a.ProjectIDs, a.ItemIDs, a.RepositoryIDs, a.WorkspaceIDs, a.MachineIDs, a.Confirmed)
+	}),
+	"prepare_reset_local_data": noArgs(func(s *CommandService) (any, error) { return s.Runtime.prepareResetLocalData() }),
+	"reset_all_local_data": withArgs([]string{"confirmation"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			Confirmation string `json:"confirmation"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.resetAllLocalData(a.Confirmation)
+	}),
+	"prepare_repository_deletion": withArgs([]string{"repositoryId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			RepositoryID int64 `json:"repositoryId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.prepareRepositoryDeletion(a.RepositoryID)
+	}),
+	"delete_repository": withArgs([]string{"repositoryId", "workspaceIds", "confirmed"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			RepositoryID int64   `json:"repositoryId"`
+			WorkspaceIDs []int64 `json:"workspaceIds"`
+			Confirmed    bool    `json:"confirmed"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.deleteRepository(a.RepositoryID, a.WorkspaceIDs, a.Confirmed)
+	}),
+	"prepare_machine_deletion": withArgs([]string{"machineId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			MachineID int64 `json:"machineId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.prepareMachineDeletion(a.MachineID)
+	}),
+	"delete_machine": withArgs([]string{"machineId", "runIds", "worktreeIds", "repositoryLocationRepositoryIds", "confirmed"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			MachineID                       int64   `json:"machineId"`
+			RunIDs                          []int64 `json:"runIds"`
+			WorktreeIDs                     []int64 `json:"worktreeIds"`
+			RepositoryLocationRepositoryIDs []int64 `json:"repositoryLocationRepositoryIds"`
+			Confirmed                       bool    `json:"confirmed"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.deleteMachine(a.MachineID, a.RunIDs, a.WorktreeIDs, a.RepositoryLocationRepositoryIDs, a.Confirmed)
+	}),
+	"prepare_item_deletion": withArgs([]string{"itemId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID int64 `json:"itemId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.prepareItemDeletion(a.ItemID)
+	}),
+	"delete_item": withArgs([]string{"itemId", "confirmed"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID    int64 `json:"itemId"`
+			Confirmed bool  `json:"confirmed"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.deleteItem(a.ItemID, a.Confirmed)
+	}),
 	"prepare_external_object_deletion": withArgs([]string{"externalObjectId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
 		var a struct {
 			ExternalObjectID int64 `json:"externalObjectId"`
@@ -1091,6 +1208,7 @@ var registeredCommandArguments = map[string][]string{
 	"open_terminal": {"runId", "terminalId", "sessionName", "paneId"}, "terminal_input": {"terminalId", "input"}, "submit_grill_answers": {"runId", "answers"}, "continue_grill": {"runId", "action"}, "go_plan": {"runId"}, "reveal_plan": {"runId"}, "terminal_resize": {"terminalId", "columns", "rows"}, "close_terminal": {"terminalId"}, "open_external_terminal": {"runId"},
 	"link_external_object": {"itemId", "url"}, "create_github_issue": {"itemId", "repositoryId", "title", "body"}, "add_external_comment": {"linkId", "body"}, "fetch_issue_document": {"externalObjectId"}, "fetch_external_comments": {"externalObjectId"}, "fetch_external_document": {"externalObjectId"}, "refresh_external_object": {"externalObjectId"}, "poll_external_objects": {},
 	"set_link_attention_policy": {"linkId", "policy"}, "set_link_purpose": {"linkId", "purpose", "specExternalObjectId"}, "set_link_watch_until": {"linkId", "watchUntil"}, "set_link_review_at": {"linkId", "reviewAt"}, "clear_link_review_at": {"linkId"}, "mark_link_reviewed": {"linkId"}, "unlink_external_link": {"linkId", "confirmed"}, "prepare_external_object_deletion": {"externalObjectId"}, "delete_external_object": {"externalObjectId", "confirmed", "stateFingerprint"},
+	"prepare_project_deletion": {"projectId"}, "delete_project": {"projectId", "itemIds", "repositoryIds", "workspaceIds", "confirmed"}, "prepare_context_deletion": {"contextId"}, "delete_context": {"contextId", "projectIds", "itemIds", "repositoryIds", "workspaceIds", "machineIds", "confirmed"}, "prepare_reset_local_data": {}, "reset_all_local_data": {"confirmation"}, "prepare_repository_deletion": {"repositoryId"}, "delete_repository": {"repositoryId", "workspaceIds", "confirmed"}, "prepare_machine_deletion": {"machineId"}, "delete_machine": {"machineId", "runIds", "worktreeIds", "repositoryLocationRepositoryIds", "confirmed"}, "prepare_item_deletion": {"itemId"}, "delete_item": {"itemId", "confirmed"},
 }
 
 func (s *CommandService) Invoke(command string, argsJSON string) (json.RawMessage, error) {

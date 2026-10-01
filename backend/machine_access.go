@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -28,6 +29,12 @@ type MachineAccess interface {
 	ResolvePath(domain.Machine, string) (string, error)
 	WriteFile(domain.Machine, string, []byte) error
 	ProvisionPstackTree(domain.Machine) (string, error)
+}
+
+// TimedMachineAccess lets destructive workflows bound pane cleanup without
+// leaving an SSH process running after its caller proceeds.
+type TimedMachineAccess interface {
+	RunShellWithTimeout(domain.Machine, string, time.Duration) (string, error)
 }
 
 type LocalSSHMachineAccess struct{}
@@ -59,6 +66,27 @@ func (LocalSSHMachineAccess) RunShellWithInput(machine domain.Machine, command s
 			return "", fmt.Errorf("command exited with %w", err)
 		}
 		return "", errors.New(detail)
+	}
+	return string(output), nil
+}
+
+func (LocalSSHMachineAccess) RunShellWithTimeout(machine domain.Machine, command string, timeout time.Duration) (string, error) {
+	program, args, err := buildMachineShellCommand(machine, command)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, program, args...).CombinedOutput()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("command timed out after %s: %s", timeout, strings.TrimSpace(string(output)))
+	}
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail != "" {
+			return "", errors.New(detail)
+		}
+		return "", fmt.Errorf("command exited with %w", err)
 	}
 	return string(output), nil
 }
@@ -337,6 +365,7 @@ type MachineAccessCall struct {
 	MachineID int64
 	Value     string
 	Contents  []byte
+	Timeout   time.Duration
 }
 type MachineAccessResult struct {
 	Value string
@@ -354,6 +383,11 @@ func (f *FakeMachineAccess) record(call MachineAccessCall) {
 }
 func (f *FakeMachineAccess) RunShell(m domain.Machine, command string) (string, error) {
 	f.record(MachineAccessCall{Operation: "run_shell", MachineID: m.ID, Value: command})
+	result := f.ShellResults[command]
+	return result.Value, result.Err
+}
+func (f *FakeMachineAccess) RunShellWithTimeout(m domain.Machine, command string, timeout time.Duration) (string, error) {
+	f.record(MachineAccessCall{Operation: "run_shell_timeout", MachineID: m.ID, Value: command, Timeout: timeout})
 	result := f.ShellResults[command]
 	return result.Value, result.Err
 }

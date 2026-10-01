@@ -5,19 +5,7 @@
   "set_context_cli_configuration_profile",
   "delete_cli_configuration_profile",
   "set_context_execution_machine",
-  "prepare_project_deletion",
-  "delete_project",
-  "prepare_context_deletion",
-  "delete_context",
-  "prepare_reset_local_data",
-  "reset_all_local_data",
   "register_machine",
   "update_machine",
-  "check_machine",
-  "prepare_repository_deletion",
-  "delete_repository",
-  "prepare_machine_deletion",
-  "delete_machine",
-  "prepare_item_deletion",
-  "delete_item"
+  "check_machine"
 ]

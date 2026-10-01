@@ -14,6 +14,10 @@ _Avoid_: workspace, tenant, account, area
 A container for Items inside a Context. It owns its configured Repositories and supplies the defaults Items created in it inherit. Every Item can use all Repositories configured for its Project.
 _Avoid_: folder, category, epic
 
+**Workspace**:
+An Item's persisted execution setup: the Repositories selected for its work, their branch choices, and whether that setup is prepared. A Workspace is metadata; physical Git working copies are Worktrees.
+_Avoid_: checkout, Worktree, Context
+
 **Item**:
 Something the user has intentionally decided to do, delegate, or keep on their radar. Everything else in the model hangs off it.
 _Avoid_: task, ticket, issue, card, mission

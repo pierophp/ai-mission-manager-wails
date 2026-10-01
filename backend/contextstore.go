@@ -42,6 +42,7 @@ type Runtime struct {
 	machineReadiness               map[int64]MachineReadiness
 	machineCheckGenerations        map[int64]uint64
 	pendingWorktreeRemovals        map[int64]pendingWorktreeRemoval
+	pendingDeletions               map[string]any
 	backgroundMu                   sync.Mutex
 	planUsageRefreshing            bool
 	planUsageLastAttempt           int64
@@ -111,7 +112,7 @@ func OpenDefaultRuntime() (*Runtime, error) {
 
 func newRuntime(contexts ContextReader, store *persistence.Store, state domain.DomainState, access MachineAccess) *Runtime {
 	tmux := TmuxTerminalRuntime{Access: access}
-	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}, pendingWorktreeRemovals: map[int64]pendingWorktreeRemoval{}, terminalConnections: map[string]terminalSession{}, terminalGenerations: map[string]uint64{}, runObservationGeneration: map[int64]uint64{}, grillOperations: map[int64]*sync.Mutex{}, grillTerminal: tmuxGrillPaneTerminal{access: access}, runExecutor: tmuxAgentRunExecutor{access: access}}
+	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}, pendingWorktreeRemovals: map[int64]pendingWorktreeRemoval{}, pendingDeletions: map[string]any{}, terminalConnections: map[string]terminalSession{}, terminalGenerations: map[string]uint64{}, runObservationGeneration: map[int64]uint64{}, grillOperations: map[int64]*sync.Mutex{}, grillTerminal: tmuxGrillPaneTerminal{access: access}, runExecutor: tmuxAgentRunExecutor{access: access}}
 }
 
 func (r *Runtime) setRunExecutor(executor agentRunExecutor) {
@@ -169,6 +170,17 @@ func (r *Runtime) Close() error {
 	if r == nil {
 		return nil
 	}
+	r.closeAllTerminalConnections()
+	if r.store == nil {
+		return nil
+	}
+	return r.store.Close()
+}
+
+func (r *Runtime) closeAllTerminalConnections() {
+	if r == nil {
+		return
+	}
 	r.terminalMu.Lock()
 	connections := make([]terminalConnection, 0, len(r.terminalConnections))
 	for terminalID, session := range r.terminalConnections {
@@ -180,10 +192,6 @@ func (r *Runtime) Close() error {
 	for _, connection := range connections {
 		_ = connection.close()
 	}
-	if r.store == nil {
-		return nil
-	}
-	return r.store.Close()
 }
 
 func (r *Runtime) ListContexts() ([]Context, error) {
