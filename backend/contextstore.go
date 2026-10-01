@@ -21,6 +21,8 @@ type ContextReader interface {
 type Runtime struct {
 	contexts                    ContextReader
 	mu                          sync.Mutex
+	runLaunchMu                 sync.Mutex
+	runExecutor                 agentRunExecutor
 	terminalMu                  sync.Mutex
 	terminalConnections         map[string]terminalSession
 	terminalGenerations         map[string]uint64
@@ -105,7 +107,16 @@ func OpenDefaultRuntime() (*Runtime, error) {
 
 func newRuntime(contexts ContextReader, store *persistence.Store, state domain.DomainState, access MachineAccess) *Runtime {
 	tmux := TmuxTerminalRuntime{Access: access}
-	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}, pendingWorktreeRemovals: map[int64]pendingWorktreeRemoval{}, terminalConnections: map[string]terminalSession{}, terminalGenerations: map[string]uint64{}, runObservationGeneration: map[int64]uint64{}}
+	return &Runtime{contexts: contexts, store: store, state: state, events: discardEventEmitter{}, machineAccess: access, machineChecker: tmux.CheckMachine, machineReadiness: map[int64]MachineReadiness{}, machineCheckGenerations: map[int64]uint64{}, pendingWorktreeRemovals: map[int64]pendingWorktreeRemoval{}, terminalConnections: map[string]terminalSession{}, terminalGenerations: map[string]uint64{}, runObservationGeneration: map[int64]uint64{}, runExecutor: tmuxAgentRunExecutor{access: access}}
+}
+
+func (r *Runtime) setRunExecutor(executor agentRunExecutor) {
+	if r == nil || executor == nil {
+		return
+	}
+	r.mu.Lock()
+	r.runExecutor = executor
+	r.mu.Unlock()
 }
 
 // SetMachineAdapters replaces the local adapters, primarily for dispatcher

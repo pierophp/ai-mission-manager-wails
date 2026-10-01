@@ -16,6 +16,50 @@ type CommandService struct{ Runtime *Runtime }
 type commandHandler func(*CommandService, json.RawMessage) (json.RawMessage, error)
 
 var commandHandlers = map[string]commandHandler{
+	"compose_run_prompt": withArgs([]string{"itemId", "executionProfile", "promptSelection", "language", "initialPrompt", "workflow"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID           int64                     `json:"itemId"`
+			ExecutionProfile domain.ExecutionProfile   `json:"executionProfile"`
+			PromptSelection  domain.RunPromptSelection `json:"promptSelection"`
+			Language         *string                   `json:"language"`
+			InitialPrompt    *string                   `json:"initialPrompt"`
+			Workflow         domain.Workflow           `json:"workflow"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		return s.Runtime.composeRunPrompt(a.ItemID, a.ExecutionProfile, a.PromptSelection, a.Language, a.InitialPrompt, a.Workflow)
+	}),
+	"get_run_launch_options": withArgs([]string{"itemId", "target"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID int64                      `json:"itemId"`
+			Target domain.RunLaunchTargetKind `json:"target"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		return s.Runtime.getRunLaunchOptions(a.ItemID, a.Target)
+	}),
+	"prepare_direct_run": withArgs([]string{"itemId", "workspaceId", "machineId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID      int64  `json:"itemId"`
+			WorkspaceID int64  `json:"workspaceId"`
+			MachineID   *int64 `json:"machineId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		return s.Runtime.prepareDirectRun(a.ItemID, a.WorkspaceID, a.MachineID)
+	}),
+	"start_run": withArgs([]string{"request"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			Request runLaunchRequest `json:"request"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		return s.Runtime.launchRun(a.Request)
+	}),
 	"reconcile_runs": noArgs(func(s *CommandService) (any, error) {
 		if !writable(s) {
 			return nil, errors.New("runtime is not configured")
@@ -908,6 +952,7 @@ var commandHandlers = map[string]commandHandler{
 }
 
 var registeredCommandArguments = map[string][]string{
+	"compose_run_prompt": {"itemId", "executionProfile", "promptSelection", "language", "initialPrompt", "workflow"}, "get_run_launch_options": {"itemId", "target"}, "prepare_direct_run": {"itemId", "workspaceId", "machineId"}, "start_run": {"request"},
 	"reconcile_runs": {}, "stop_run": {"runId"}, "finish_run": {"runId"}, "delete_run": {"runId", "confirmed"}, "list_run_suggestions": {}, "attach_run": {"suggestion"}, "stop_untracked_agent": {"suggestion"}, "delete_untracked_agent": {"suggestion"},
 	"get_setup_state": {}, "complete_setup": {"contextName", "provider"}, "get_health_status": {"provider"},
 	"list_contexts": {}, "new_context_configuration": {}, "list_context_attention_defaults": {}, "list_projects": {}, "list_repositories": {}, "list_repository_locations": {}, "list_audit_history": {}, "get_activity_tab": {}, "list_grill_model_catalog": {}, "refresh_grill_model_catalog": {}, "list_plan_usage": {}, "refresh_plan_usage": {},

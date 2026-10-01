@@ -55,6 +55,7 @@ type Event struct {
 	Confirmed            bool
 	StateFingerprint     string
 	Worktree             *Worktree
+	Run                  *Run
 	WorkspaceID          int64
 	WorktreeID           int64
 	DestructiveConfirmed bool
@@ -95,6 +96,7 @@ type Effect struct {
 	AttentionDefaults  []ContextAttentionDefault
 	Workspace          *Workspace
 	Worktree           *Worktree
+	Run                *Run
 	ExternalObject     *ExternalObject
 	ExternalLink       *Link
 	ExternalSnapshot   *ExternalSnapshot

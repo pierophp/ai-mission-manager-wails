@@ -23,6 +23,7 @@ type ExternalChangeKind string
 type GrillContinuationAction string
 type ImplementationQueuePauseReasonKind string
 type AttentionEntryKind string
+type RunLaunchTargetKind string
 
 const (
 	AgentClaude                  AgentKind                 = "claude"
@@ -53,9 +54,41 @@ const (
 	PaneUnknown                  RunPaneStatus             = "unknown"
 	PaneAvailable                RunPaneStatus             = "available"
 	PaneMissing                  RunPaneStatus             = "missing"
+	ExecutionProfileInvestigate  ExecutionProfile          = "investigate"
+	ExecutionProfileImplement    ExecutionProfile          = "implement"
+	ExecutionProfileReview       ExecutionProfile          = "review"
+	ExecutionProfileCustomPrompt ExecutionProfile          = "custom"
+	ExecutionProfileAutonomous   ExecutionProfile          = "autonomous"
+	ExecutionProfilePlan         ExecutionProfile          = "plan"
+	ExecutionProfilePstackReview ExecutionProfile          = "pstack-review"
+	ExecutionProfileGrill        ExecutionProfile          = "grill"
+	RunTargetCheckout            RunLaunchTargetKind       = "checkout"
+	RunTargetWorktree            RunLaunchTargetKind       = "worktree"
 	TransportLocal               MachineTransportKind      = "local"
 	TransportSSH                 MachineTransportKind      = "ssh"
 )
+
+type RunPromptSelection struct {
+	IncludeObjective  bool    `json:"includeObjective"`
+	ExternalObjectIDs []int64 `json:"externalObjectIds"`
+}
+
+type RunLaunchProfileOption struct {
+	ExecutionProfile      ExecutionProfile   `json:"executionProfile"`
+	Configuration         GrillConfiguration `json:"configuration"`
+	RequiresInitialPrompt bool               `json:"requiresInitialPrompt"`
+}
+
+type RunLaunchWorkflowOptions struct {
+	Workflow       Workflow                 `json:"workflow"`
+	DefaultProfile ExecutionProfile         `json:"defaultProfile"`
+	Profiles       []RunLaunchProfileOption `json:"profiles"`
+}
+
+type RunLaunchOptions struct {
+	DefaultWorkflow Workflow                   `json:"defaultWorkflow"`
+	Workflows       []RunLaunchWorkflowOptions `json:"workflows"`
+}
 
 type GrillConfiguration struct {
 	Agent  AgentKind `json:"agent"`

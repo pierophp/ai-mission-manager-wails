@@ -65,7 +65,7 @@ func (r *Runtime) persistDecisionLocked(snapshot domain.DomainState, decision *d
 }
 
 func sameSequences(a, b domain.DomainState) bool {
-	return a.NextContextID == b.NextContextID && a.NextProjectID == b.NextProjectID && a.NextRepositoryID == b.NextRepositoryID && a.NextWorkspaceID == b.NextWorkspaceID && a.NextWorktreeID == b.NextWorktreeID && a.NextItemID == b.NextItemID && a.NextExternalObjectID == b.NextExternalObjectID && a.NextLinkID == b.NextLinkID && a.NextActivityID == b.NextActivityID && a.NextAuditID == b.NextAuditID
+	return a.NextContextID == b.NextContextID && a.NextProjectID == b.NextProjectID && a.NextRepositoryID == b.NextRepositoryID && a.NextWorkspaceID == b.NextWorkspaceID && a.NextWorktreeID == b.NextWorktreeID && a.NextItemID == b.NextItemID && a.NextRunID == b.NextRunID && a.NextExternalObjectID == b.NextExternalObjectID && a.NextLinkID == b.NextLinkID && a.NextActivityID == b.NextActivityID && a.NextAuditID == b.NextAuditID
 }
 
 func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persistence.AuditAction, error) {
@@ -288,6 +288,13 @@ func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persis
 				return nil, nil, err
 			}
 			out = append(out, persistence.Effect{SQL: `INSERT INTO activities(id,external_object_id,observed_at,changes_json) VALUES(?,?,?,?)`, Args: []any{activity.ID, activity.ExternalObjectID, activity.ObservedAt, string(changes)}, InsertedSequence: "next_activity_id", InsertedID: activity.ID})
+		case "persist_run":
+			if effect.Run == nil {
+				return nil, nil, errors.New("Run effect has no Run")
+			}
+			dbEffect, runAudit := startedRunPersistence(*effect.Run)
+			out = append(out, dbEffect)
+			audit = append(audit, runAudit)
 		case "external_object_refreshed":
 			audit = append(audit, auditJSON("externalObjectRefreshed", "external_object_id", effect.ExternalObjectID))
 		default:

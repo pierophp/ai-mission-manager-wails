@@ -42,6 +42,25 @@ func Decide(input DomainState, event Event) (Decision, error) {
 	state := cloneState(input)
 	clean := func(value string) string { return strings.TrimSpace(value) }
 	switch event.Kind {
+	case "start_run":
+		if event.Run == nil {
+			return Decision{}, DomainError("a Run is required")
+		}
+		run := *event.Run
+		if state.NextRunID < 1 || state.NextRunID == math.MaxInt64 || run.ID != state.NextRunID {
+			return Decision{}, DomainError("Run identifier does not match the next Run sequence")
+		}
+		if run.ItemID < 1 || run.MachineID < 1 || run.WorkspaceID == nil || *run.WorkspaceID < 1 || strings.TrimSpace(run.Prompt) == "" || strings.TrimSpace(run.SessionName) == "" || strings.TrimSpace(run.PaneID) == "" {
+			return Decision{}, DomainError("Run identity, prompt, and Pane are required")
+		}
+		for _, existing := range state.Runs {
+			if existing.ID == run.ID || existing.SessionName == run.SessionName {
+				return Decision{}, DomainError("Run identifier or session already exists")
+			}
+		}
+		state.Runs = append(state.Runs, run)
+		state.NextRunID++
+		return Decision{State: state, Effects: []Effect{{Kind: "persist_run", Run: &run}}}, nil
 	case "create_context":
 		name := clean(event.Name)
 		if name == "" {
