@@ -175,6 +175,81 @@ var commandHandlers = map[string]commandHandler{
 		}
 		return s.Runtime.updateRepositoryLocation(a.RepositoryID, a.PreviousMachineID, a.MachineID, a.CheckoutPath, a.WorktreeRoot)
 	}),
+	"create_worktree": withArgs([]string{"workspaceId", "repositoryId", "machineId", "path", "branch", "baseBranch"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			WorkspaceID  int64  `json:"workspaceId"`
+			RepositoryID int64  `json:"repositoryId"`
+			MachineID    int64  `json:"machineId"`
+			Path         string `json:"path"`
+			Branch       string `json:"branch"`
+			BaseBranch   string `json:"baseBranch"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.createWorktree(a.WorkspaceID, a.RepositoryID, a.MachineID, a.Path, a.Branch, a.BaseBranch)
+	}),
+	"prepare_worktree": withArgs([]string{"workspaceId", "repositoryId", "machineId", "reuseExistingBranch", "confirmDirtyAttachment"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			WorkspaceID            int64 `json:"workspaceId"`
+			RepositoryID           int64 `json:"repositoryId"`
+			MachineID              int64 `json:"machineId"`
+			ReuseExistingBranch    bool  `json:"reuseExistingBranch"`
+			ConfirmDirtyAttachment bool  `json:"confirmDirtyAttachment"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.prepareWorktree(a.WorkspaceID, a.RepositoryID, a.MachineID, a.ReuseExistingBranch, a.ConfirmDirtyAttachment)
+	}),
+	"attach_worktree": withArgs([]string{"workspaceId", "repositoryId", "machineId", "path", "confirmDirtyAttachment"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			WorkspaceID            int64  `json:"workspaceId"`
+			RepositoryID           int64  `json:"repositoryId"`
+			MachineID              int64  `json:"machineId"`
+			Path                   string `json:"path"`
+			ConfirmDirtyAttachment bool   `json:"confirmDirtyAttachment"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.attachWorktree(a.WorkspaceID, a.RepositoryID, a.MachineID, a.Path, a.ConfirmDirtyAttachment)
+	}),
+	"prepare_worktree_removal": withArgs([]string{"worktreeId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			WorktreeID int64 `json:"worktreeId"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.prepareWorktreeRemoval(a.WorktreeID)
+	}),
+	"remove_worktree": withArgs([]string{"worktreeId", "confirmed", "destructiveConfirmed"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			WorktreeID           int64 `json:"worktreeId"`
+			Confirmed            bool  `json:"confirmed"`
+			DestructiveConfirmed bool  `json:"destructiveConfirmed"`
+		}
+		if err := decodeArgs(raw, &a); err != nil {
+			return nil, err
+		}
+		if !writable(s) {
+			return nil, errors.New("runtime is not configured")
+		}
+		return s.Runtime.removeWorktree(a.WorktreeID, a.Confirmed, a.DestructiveConfirmed)
+	}),
 	"list_machines": noArgs(func(s *CommandService) (any, error) {
 		if !writable(s) {
 			return nil, errors.New("runtime is not configured")
@@ -691,6 +766,7 @@ var registeredCommandArguments = map[string][]string{
 	"set_context_grill_defaults": {"contextId", "defaults"}, "set_context_implement_defaults": {"contextId", "defaults"}, "set_context_dirty_checkout_check": {"contextId", "enabled"},
 	"set_context_attention_default": {"contextId", "objectKind", "policy"}, "create_project": {"name", "contextId", "defaultItemStatus", "executionMode"}, "update_project": {"projectId", "name", "defaultItemStatus", "executionMode"},
 	"register_repository": {"projectId", "name", "remoteUrl"}, "update_repository": {"repositoryId", "name", "remoteUrl", "baseBranch"}, "register_repository_at_location": {"projectId", "name", "remoteUrl", "baseBranch", "machineId", "checkoutPath", "worktreeRoot", "cloneIntoDestination"}, "update_repository_location": {"repositoryId", "previousMachineId", "machineId", "checkoutPath", "worktreeRoot"},
+	"create_worktree": {"workspaceId", "repositoryId", "machineId", "path", "branch", "baseBranch"}, "prepare_worktree": {"workspaceId", "repositoryId", "machineId", "reuseExistingBranch", "confirmDirtyAttachment"}, "attach_worktree": {"workspaceId", "repositoryId", "machineId", "path", "confirmDirtyAttachment"}, "prepare_worktree_removal": {"worktreeId"}, "remove_worktree": {"worktreeId", "confirmed", "destructiveConfirmed"},
 	"get_home": {"contextId", "now"}, "search_items_command": {"query", "contextId"}, "list_inbox_items": {}, "create_item": {"title", "contextId", "projectId", "notes"}, "set_item_status": {"itemId", "status"}, "set_item_title": {"itemId", "title"}, "set_item_notes": {"itemId", "notes"}, "add_item_reminder": {"itemId", "remindAt"}, "remove_item_reminder": {"itemId", "reminderId"}, "set_item_relation": {"fromItemId", "toItemId", "kind"},
 	"link_external_object": {"itemId", "url"}, "create_github_issue": {"itemId", "repositoryId", "title", "body"}, "add_external_comment": {"linkId", "body"}, "fetch_issue_document": {"externalObjectId"}, "fetch_external_comments": {"externalObjectId"}, "fetch_external_document": {"externalObjectId"}, "refresh_external_object": {"externalObjectId"}, "poll_external_objects": {},
 	"set_link_attention_policy": {"linkId", "policy"}, "set_link_purpose": {"linkId", "purpose", "specExternalObjectId"}, "set_link_watch_until": {"linkId", "watchUntil"}, "set_link_review_at": {"linkId", "reviewAt"}, "clear_link_review_at": {"linkId"}, "mark_link_reviewed": {"linkId"}, "unlink_external_link": {"linkId", "confirmed"}, "prepare_external_object_deletion": {"externalObjectId"}, "delete_external_object": {"externalObjectId", "confirmed", "stateFingerprint"},

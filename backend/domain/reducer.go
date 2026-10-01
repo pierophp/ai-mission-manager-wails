@@ -675,6 +675,125 @@ func Decide(input DomainState, event Event) (Decision, error) {
 			}
 		}
 		return Decision{State: state, Effects: effects}, nil
+	case "register_worktree":
+		if event.Worktree == nil {
+			return Decision{}, DomainError("Worktree details are required")
+		}
+		worktree := *event.Worktree
+		if worktree.ID != 0 {
+			return Decision{}, DomainError("Worktree ID is assigned by the application")
+		}
+		worktree.Path = strings.TrimSpace(worktree.Path)
+		worktree.Branch = strings.TrimSpace(worktree.Branch)
+		worktree.BaseBranch = strings.TrimSpace(worktree.BaseBranch)
+		if worktree.Path == "" || worktree.Branch == "" || worktree.BaseBranch == "" {
+			return Decision{}, DomainError("Worktree path, branch, and base branch are required")
+		}
+		var workspace *Workspace
+		for i := range state.Workspaces {
+			if state.Workspaces[i].ID == worktree.WorkspaceID {
+				workspace = &state.Workspaces[i]
+				break
+			}
+		}
+		if workspace == nil {
+			return Decision{}, DomainError("Workspace " + itoa(worktree.WorkspaceID) + " does not exist")
+		}
+		if !containsWorkspaceRepository(workspace.Repositories, worktree.RepositoryID) {
+			return Decision{}, DomainError("Repository " + itoa(worktree.RepositoryID) + " is not configured for Workspace " + itoa(worktree.WorkspaceID))
+		}
+		var repository *Repository
+		for i := range state.Repositories {
+			if state.Repositories[i].ID == worktree.RepositoryID {
+				repository = &state.Repositories[i]
+				break
+			}
+		}
+		if repository == nil {
+			return Decision{}, DomainError("Repository " + itoa(worktree.RepositoryID) + " does not exist")
+		}
+		var item *Item
+		for i := range state.Items {
+			if state.Items[i].ID == workspace.ItemID {
+				item = &state.Items[i]
+				break
+			}
+		}
+		if item == nil {
+			return Decision{}, DomainError("Item " + itoa(workspace.ItemID) + " does not exist")
+		}
+		var project *Project
+		for i := range state.Projects {
+			if state.Projects[i].ID == item.ProjectID {
+				project = &state.Projects[i]
+				break
+			}
+		}
+		if project == nil || repository.ProjectID != project.ID {
+			return Decision{}, DomainError("Repository " + itoa(worktree.RepositoryID) + " does not belong to the Workspace Item's Project")
+		}
+		var machine *Machine
+		for i := range state.Machines {
+			if state.Machines[i].ID == worktree.MachineID {
+				machine = &state.Machines[i]
+				break
+			}
+		}
+		if machine == nil {
+			return Decision{}, DomainError("Machine " + itoa(worktree.MachineID) + " does not exist")
+		}
+		if machine.ContextID != project.ContextID {
+			return Decision{}, DomainError("Machine " + itoa(worktree.MachineID) + " does not belong to Context " + itoa(project.ContextID))
+		}
+		context := contextIndex(state, project.ContextID)
+		if context < 0 || state.Contexts[context].ExecutionMachineID == nil || *state.Contexts[context].ExecutionMachineID != worktree.MachineID {
+			return Decision{}, DomainError("Machine " + itoa(worktree.MachineID) + " is not the Context's execution Machine")
+		}
+		for _, existing := range state.Worktrees {
+			if existing.WorkspaceID == worktree.WorkspaceID && existing.RepositoryID == worktree.RepositoryID {
+				return Decision{}, DomainError("Workspace already has a Worktree for this Repository")
+			}
+			if existing.MachineID == worktree.MachineID && existing.Path == worktree.Path {
+				return Decision{}, DomainError("Worktree path is already registered")
+			}
+		}
+		if state.NextWorktreeID < 1 || state.NextWorktreeID == math.MaxInt64 {
+			return Decision{}, DomainError("the Worktree identifier sequence is exhausted")
+		}
+		worktree.ID = state.NextWorktreeID
+		state.NextWorktreeID++
+		state.Worktrees = append(state.Worktrees, worktree)
+		previousPreparationState := workspace.PreparationState
+		workspace.PreparationState = workspacePreparationState(state, workspace.ID, previousPreparationState)
+		updatedWorkspace := *workspace
+		return Decision{State: state, Effects: []Effect{{Kind: "persist_worktree", Worktree: &worktree, Workspace: &updatedWorkspace}}}, nil
+	case "remove_worktree":
+		if !event.Confirmed {
+			return Decision{}, DomainError("Worktree removal must be confirmed")
+		}
+		if event.DestructiveRequired && !event.DestructiveConfirmed {
+			return Decision{}, DomainError("Removing a dirty Worktree requires destructive confirmation")
+		}
+		for i, worktree := range state.Worktrees {
+			if worktree.ID != event.WorktreeID {
+				continue
+			}
+			state.Worktrees = append(state.Worktrees[:i], state.Worktrees[i+1:]...)
+			workspaceIndex := -1
+			for j := range state.Workspaces {
+				if state.Workspaces[j].ID == worktree.WorkspaceID {
+					workspaceIndex = j
+					break
+				}
+			}
+			if workspaceIndex < 0 {
+				return Decision{}, DomainError("Workspace " + itoa(worktree.WorkspaceID) + " does not exist")
+			}
+			state.Workspaces[workspaceIndex].PreparationState = workspacePreparationState(state, worktree.WorkspaceID, state.Workspaces[workspaceIndex].PreparationState)
+			updatedWorkspace := state.Workspaces[workspaceIndex]
+			return Decision{State: state, Effects: []Effect{{Kind: "delete_worktree", Worktree: &worktree, Workspace: &updatedWorkspace}}}, nil
+		}
+		return Decision{}, DomainError("Worktree " + itoa(event.WorktreeID) + " does not exist")
 	case "link_external_object":
 		if event.ExternalObject == nil {
 			return Decision{}, DomainError("External Object identity is required")
@@ -874,6 +993,65 @@ func hasMachine(s DomainState, id int64) bool {
 		}
 	}
 	return false
+}
+
+func containsWorkspaceRepository(repositories []WorkspaceRepository, id int64) bool {
+	for _, repository := range repositories {
+		if repository.RepositoryID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func workspacePreparationState(state DomainState, workspaceID int64, previous WorkspacePreparationState) WorkspacePreparationState {
+	var workspace *Workspace
+	for i := range state.Workspaces {
+		if state.Workspaces[i].ID == workspaceID {
+			workspace = &state.Workspaces[i]
+			break
+		}
+	}
+	if workspace == nil {
+		return previous
+	}
+	var projectID int64
+	for _, item := range state.Items {
+		if item.ID == workspace.ItemID {
+			projectID = item.ProjectID
+			break
+		}
+	}
+	if projectID == 0 {
+		return previous
+	}
+	count := 0
+	for _, repository := range state.Repositories {
+		if repository.ProjectID != projectID {
+			continue
+		}
+		count++
+		found := false
+		for _, worktree := range state.Worktrees {
+			if worktree.WorkspaceID == workspaceID && worktree.RepositoryID == repository.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if previous == WorkspaceResumable {
+				return WorkspaceResumable
+			}
+			return WorkspacePending
+		}
+	}
+	if count > 0 {
+		return WorkspaceReady
+	}
+	if previous == WorkspaceResumable {
+		return WorkspaceResumable
+	}
+	return WorkspacePending
 }
 
 func contextIndex(state DomainState, id int64) int {

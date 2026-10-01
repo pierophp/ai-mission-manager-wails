@@ -87,6 +87,51 @@ func TestDecideRegistersAndUpdatesRepositoryAndMachineLocation(t *testing.T) {
 	}
 }
 
+func TestDecideRegistersAndRemovesWorktreesWithExplicitDirtyConfirmation(t *testing.T) {
+	state := DomainState{
+		NextWorktreeID: 9,
+		Contexts:       []Context{{ID: 1, ExecutionMachineID: int64Ptr(3)}},
+		Projects:       []Project{{ID: 2, ContextID: 1}},
+		Items:          []Item{{ID: 5, ProjectID: 2}},
+		Repositories:   []Repository{{ID: 4, ProjectID: 2, BaseBranch: "main"}},
+		Machines:       []Machine{{ID: 3, ContextID: 1}},
+		Workspaces:     []Workspace{{ID: 6, ItemID: 5, Repositories: []WorkspaceRepository{{RepositoryID: 4, Branch: "mission-MC-1", BaseBranch: "main"}}}},
+	}
+	worktree := Worktree{WorkspaceID: 6, RepositoryID: 4, MachineID: 3, Path: "/tmp/worktree", Branch: "mission-MC-1", BaseBranch: "main", IsDirty: true}
+	created, err := Decide(state, Event{Kind: "register_worktree", Worktree: &worktree})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := created.State.Worktrees[0]; got.ID != 9 || got.WorkspaceID != 6 || got.IsDirty != true || created.State.NextWorktreeID != 10 {
+		t.Fatalf("Worktree = %#v", got)
+	}
+	if created.State.Workspaces[0].PreparationState != WorkspaceReady || len(created.Effects) != 1 || created.Effects[0].Kind != "persist_worktree" || created.Effects[0].Workspace == nil {
+		t.Fatalf("registration = %#v", created)
+	}
+	if _, err := Decide(created.State, Event{Kind: "remove_worktree", WorktreeID: 9}); err == nil || err.Error() != "Worktree removal must be confirmed" {
+		t.Fatalf("removal without confirmation = %v", err)
+	}
+	if _, err := Decide(created.State, Event{Kind: "remove_worktree", WorktreeID: 9, Confirmed: true, DestructiveRequired: true}); err == nil || err.Error() != "Removing a dirty Worktree requires destructive confirmation" {
+		t.Fatalf("dirty removal without destructive confirmation = %v", err)
+	}
+	confirmed, err := Decide(created.State, Event{Kind: "remove_worktree", WorktreeID: 9, Confirmed: true, DestructiveConfirmed: true, DestructiveRequired: true})
+	if err != nil || len(confirmed.State.Worktrees) != 0 {
+		t.Fatalf("dirty removal with destructive confirmation = %#v, %v", confirmed, err)
+	}
+	removed, err := Decide(created.State, Event{Kind: "remove_worktree", WorktreeID: 9, Confirmed: true, DestructiveConfirmed: false})
+	if err != nil || len(removed.State.Worktrees) != 0 || len(removed.Effects) != 1 || removed.Effects[0].Kind != "delete_worktree" || removed.Effects[0].Workspace == nil || removed.State.Workspaces[0].PreparationState != WorkspacePending {
+		t.Fatalf("remove after a fresh clean inspection, despite stale dirty snapshot = %#v, %v", removed, err)
+	}
+}
+
+func TestDecideRejectsWorktreeForUnconfiguredRepository(t *testing.T) {
+	state := DomainState{NextWorktreeID: 1, Repositories: []Repository{{ID: 4}}, Machines: []Machine{{ID: 3}}, Workspaces: []Workspace{{ID: 6, Repositories: []WorkspaceRepository{}}}}
+	worktree := Worktree{WorkspaceID: 6, RepositoryID: 4, MachineID: 3, Path: "/tmp/wt", Branch: "branch", BaseBranch: "main"}
+	if _, err := Decide(state, Event{Kind: "register_worktree", Worktree: &worktree}); err == nil || err.Error() != "Repository 4 is not configured for Workspace 6" {
+		t.Fatalf("register unconfigured Repository = %v", err)
+	}
+}
+
 func TestDecideEnsuresProjectWorkspacesFromRepositoriesIdempotently(t *testing.T) {
 	state := DomainState{
 		NextWorkspaceID: 2,

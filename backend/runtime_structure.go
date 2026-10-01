@@ -65,7 +65,7 @@ func (r *Runtime) persistDecisionLocked(snapshot domain.DomainState, decision *d
 }
 
 func sameSequences(a, b domain.DomainState) bool {
-	return a.NextContextID == b.NextContextID && a.NextProjectID == b.NextProjectID && a.NextRepositoryID == b.NextRepositoryID && a.NextWorkspaceID == b.NextWorkspaceID && a.NextItemID == b.NextItemID && a.NextExternalObjectID == b.NextExternalObjectID && a.NextLinkID == b.NextLinkID && a.NextActivityID == b.NextActivityID && a.NextAuditID == b.NextAuditID
+	return a.NextContextID == b.NextContextID && a.NextProjectID == b.NextProjectID && a.NextRepositoryID == b.NextRepositoryID && a.NextWorkspaceID == b.NextWorkspaceID && a.NextWorktreeID == b.NextWorktreeID && a.NextItemID == b.NextItemID && a.NextExternalObjectID == b.NextExternalObjectID && a.NextLinkID == b.NextLinkID && a.NextActivityID == b.NextActivityID && a.NextAuditID == b.NextAuditID
 }
 
 func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persistence.AuditAction, error) {
@@ -155,6 +155,24 @@ func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persis
 					out = append(out, persistence.Effect{SQL: `DELETE FROM repository_locations WHERE repository_id=? AND machine_id=?`, Args: []any{location.RepositoryID, *effect.PreviousMachineID}})
 				}
 				out = append(out, repositoryLocationInsert(*location))
+			}
+		case "persist_worktree":
+			w := effect.Worktree
+			if w == nil {
+				return nil, nil, errors.New("Worktree effect has no Worktree")
+			}
+			out = append(out, persistence.Effect{SQL: `INSERT INTO worktrees(id,workspace_id,repository_id,machine_id,path,branch,base_branch,is_dirty) VALUES(?,?,?,?,?,?,?,?)`, Args: []any{w.ID, w.WorkspaceID, w.RepositoryID, w.MachineID, w.Path, w.Branch, w.BaseBranch, boolInt64(w.IsDirty)}, InsertedSequence: "next_worktree_id", InsertedID: w.ID})
+			if effect.Workspace != nil {
+				out = append(out, persistence.Effect{SQL: `UPDATE workspaces SET preparation_state=? WHERE id=?`, Args: []any{effect.Workspace.PreparationState, effect.Workspace.ID}})
+			}
+		case "delete_worktree":
+			w := effect.Worktree
+			if w == nil {
+				return nil, nil, errors.New("Worktree effect has no Worktree")
+			}
+			out = append(out, persistence.Effect{SQL: `DELETE FROM worktrees WHERE id=?`, Args: []any{w.ID}})
+			if effect.Workspace != nil {
+				out = append(out, persistence.Effect{SQL: `UPDATE workspaces SET preparation_state=? WHERE id=?`, Args: []any{effect.Workspace.PreparationState, effect.Workspace.ID}})
 			}
 		case "update_context":
 			c := effect.Context

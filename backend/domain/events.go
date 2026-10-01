@@ -54,6 +54,11 @@ type Event struct {
 	Timestamp            string
 	Confirmed            bool
 	StateFingerprint     string
+	Worktree             *Worktree
+	WorkspaceID          int64
+	WorktreeID           int64
+	DestructiveConfirmed bool
+	DestructiveRequired  bool
 }
 
 type ContextConfiguration struct {
@@ -89,6 +94,7 @@ type Effect struct {
 	PreviousMachineID  *int64
 	AttentionDefaults  []ContextAttentionDefault
 	Workspace          *Workspace
+	Worktree           *Worktree
 	ExternalObject     *ExternalObject
 	ExternalLink       *Link
 	ExternalSnapshot   *ExternalSnapshot
