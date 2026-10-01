@@ -3,6 +3,7 @@ package backend
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/piero/ai-mission-manager-wails/backend/domain"
 	"github.com/piero/ai-mission-manager-wails/backend/persistence"
+	"github.com/piero/ai-mission-manager-wails/backend/pstack"
 )
 
 type fakeAgentRunExecutor struct {
@@ -75,6 +77,7 @@ func fmtRunID(id int64) string          { return strconv.FormatInt(id, 10) }
 
 func TestStartRunPersistsBeforeGateAndCoversDirectAndWorktree(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv("HOME", root)
 	remote := filepath.Join(root, "origin.git")
 	seed := filepath.Join(root, "seed")
 	checkout := filepath.Join(root, "checkout")
@@ -181,6 +184,44 @@ func TestStartRunPersistsBeforeGateAndCoversDirectAndWorktree(t *testing.T) {
 	worktreeRecord.State = domain.RunFinished
 	if _, changed, err := runtime.applyAgentStateRecord(3, worktreeRecord); err != nil || !changed {
 		t.Fatalf("worktree finished transition: changed=%v err=%v", changed, err)
+	}
+	request["strategy"] = map[string]any{"kind": "worktree", "worktreeId": worktree.ID, "agent": "codex", "configuration": map[string]any{"agent": "codex", "model": "gpt-6-sol", "effort": "high"}, "executionProfile": "autonomous", "workflow": "pstack", "prompt": "Run pstack against this worktree.", "promptSelection": map[string]any{"includeObjective": true, "externalObjectIds": []int64{}}}
+	fake.onLaunch = func() error {
+		root := filepath.Join(os.Getenv("HOME"), ".local/share/ai-mission-manager/pstack", pstack.TreeHash)
+		if _, err := os.Stat(filepath.Join(root, "skills/poteto-mode/SKILL.md")); err != nil {
+			return fmt.Errorf("pstack tree missing before pane launch: %w", err)
+		}
+		roles, err := filepath.Glob(filepath.Join(root, "roles", "context-1-*.md"))
+		if err != nil || len(roles) != 1 {
+			return fmt.Errorf("pstack roles missing before pane launch: %v", err)
+		}
+		contents, err := os.ReadFile(roles[0])
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(contents), "## Code delegate") {
+			return errors.New("pstack role file was incomplete before pane launch")
+		}
+		return nil
+	}
+	pstackRaw := call("start_run", mustJSON(t, map[string]any{"request": request}))
+	var pstackRun domain.Run
+	if err := json.Unmarshal(pstackRaw, &pstackRun); err != nil {
+		t.Fatal(err)
+	}
+	if pstackRun.Workflow != domain.WorkflowPstack || pstackRun.SkillSnapshot == nil || !strings.Contains(pstackRun.Prompt, filepath.Join(root, ".local/share/ai-mission-manager/pstack", pstack.TreeHash)) || len(fake.released) != 4 {
+		t.Fatalf("pstack Run=%s released=%v", pstackRaw, fake.released)
+	}
+	roleFiles, err := filepath.Glob(filepath.Join(root, ".local/share/ai-mission-manager/pstack", pstack.TreeHash, "roles", "context-1-*.md"))
+	if err != nil || len(roleFiles) != 1 {
+		t.Fatalf("role files=%v err=%v", roleFiles, err)
+	}
+	info, err := os.Stat(roleFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("role file mode = %v, want 0600", info.Mode().Perm())
 	}
 }
 

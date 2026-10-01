@@ -2,7 +2,6 @@ package backend
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,12 +13,14 @@ import (
 	"time"
 
 	"github.com/piero/ai-mission-manager-wails/backend/domain"
+	"github.com/piero/ai-mission-manager-wails/backend/pstack"
 )
 
 // MachineAccess is the shell and file boundary for local and SSH Machines.
 // Application features use this seam so tests never need a real SSH server.
 type MachineAccess interface {
 	RunShell(domain.Machine, string) (string, error)
+	RunShellWithInput(domain.Machine, string, []byte) (string, error)
 	FindExecutable(domain.Machine, string) (string, error)
 	HomeDirectory(domain.Machine) (string, error)
 	HomePath(domain.Machine) string
@@ -39,11 +40,18 @@ type machineHomeError struct {
 func (e machineHomeError) Error() string { return e.message }
 
 func (LocalSSHMachineAccess) RunShell(machine domain.Machine, command string) (string, error) {
+	return LocalSSHMachineAccess{}.RunShellWithInput(machine, command, nil)
+}
+
+func (LocalSSHMachineAccess) RunShellWithInput(machine domain.Machine, command string, input []byte) (string, error) {
 	program, args, err := buildMachineShellCommand(machine, command)
 	if err != nil {
 		return "", err
 	}
 	cmd := exec.Command(program, args...)
+	if input != nil {
+		cmd.Stdin = bytes.NewReader(input)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		detail := strings.TrimSpace(string(output))
@@ -153,9 +161,8 @@ func (a LocalSSHMachineAccess) WriteFile(machine domain.Machine, path string, co
 	if a.IsLocal(machine) {
 		return atomicWriteFile(resolved, contents)
 	}
-	encoded := base64.StdEncoding.EncodeToString(contents)
-	command := "mkdir -p -- " + shellQuote(filepath.Dir(resolved)) + " && tmp=$(mktemp " + shellQuote(resolved+".tmp.XXXXXXXX") + ") && trap 'rm -f -- \"$tmp\"' EXIT && printf %s " + shellQuote(encoded) + " | base64 -d > \"$tmp\" && chmod 600 \"$tmp\" && mv -f -- \"$tmp\" " + shellQuote(resolved)
-	_, err = a.RunShell(machine, command)
+	command := "set -eu; umask 077; target=" + shellQuote(resolved) + "; parent=${target%/*}; mkdir -p \"$parent\"; temporary=\"$target.tmp.$$\"; trap 'rm -f \"$temporary\"' EXIT HUP INT TERM; cat > \"$temporary\"; chmod 600 \"$temporary\"; mv -f \"$temporary\" \"$target\"; trap - EXIT HUP INT TERM"
+	_, err = a.RunShellWithInput(machine, command, contents)
 	return err
 }
 
@@ -167,14 +174,18 @@ func (a LocalSSHMachineAccess) ProvisionPstackTree(machine domain.Machine) (stri
 	if err != nil {
 		return "", err
 	}
-	target := filepath.Join(home, ".local", "share", "ai-mission-manager", "pstack")
+	target := filepath.Join(home, ".local", "share", "ai-mission-manager", "pstack", pstack.TreeHash)
 	if a.IsLocal(machine) {
-		if err := os.MkdirAll(target, 0o700); err != nil {
+		if err := pstack.InstallLocal(target); err != nil {
 			return "", err
 		}
 		return target, nil
 	}
-	_, err = a.RunShell(machine, "mkdir -p -- "+shellQuote(target))
+	payload, err := pstack.Payload()
+	if err != nil {
+		return "", err
+	}
+	_, err = a.RunShellWithInput(machine, pstack.RemoteInstallCommand(target), payload)
 	return target, err
 }
 
@@ -343,6 +354,11 @@ func (f *FakeMachineAccess) record(call MachineAccessCall) {
 }
 func (f *FakeMachineAccess) RunShell(m domain.Machine, command string) (string, error) {
 	f.record(MachineAccessCall{Operation: "run_shell", MachineID: m.ID, Value: command})
+	result := f.ShellResults[command]
+	return result.Value, result.Err
+}
+func (f *FakeMachineAccess) RunShellWithInput(m domain.Machine, command string, input []byte) (string, error) {
+	f.record(MachineAccessCall{Operation: "run_shell_stdin", MachineID: m.ID, Value: command, Contents: input})
 	result := f.ShellResults[command]
 	return result.Value, result.Err
 }

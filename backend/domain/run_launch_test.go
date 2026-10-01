@@ -30,20 +30,20 @@ func TestComposeRunPromptKeepsSelectedSourcesAndRequiresCustomPrompt(t *testing.
 	}
 }
 
-func TestRunLaunchOptionsOnlyAdvertiseSupportedWorkflowAndWorktreeProfiles(t *testing.T) {
+func TestRunLaunchOptionsAdvertiseBothWorkflowsAndWorktreeProfiles(t *testing.T) {
 	state := DomainState{Contexts: []Context{{ID: 1, DefaultWorkflow: WorkflowPstack, ImplementDefaults: GrillConfiguration{Agent: AgentClaude, Model: "claude-sonnet-5", Effort: "high"}, PstackDefaults: GrillConfiguration{Agent: AgentCodex, Model: "gpt-6-sol", Effort: "high"}}}, Projects: []Project{{ID: 2, ContextID: 1}}, Items: []Item{{ID: 3, ProjectID: 2}}}
 	got, err := RunLaunchOptionsFor(state, 3, RunTargetWorktree)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DefaultWorkflow != WorkflowMattPocock || len(got.Workflows) != 1 || got.Workflows[0].Workflow != WorkflowMattPocock {
+	if got.DefaultWorkflow != WorkflowPstack || len(got.Workflows) != 2 || got.Workflows[1].Workflow != WorkflowPstack {
 		t.Fatalf("options = %#v", got)
 	}
 	checkout, err := RunLaunchOptionsFor(state, 3, RunTargetCheckout)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if checkout.DefaultWorkflow != WorkflowMattPocock || checkout.Workflows[0].DefaultProfile != ExecutionProfileGrill || !checkout.Workflows[0].Profiles[0].RequiresInitialPrompt {
+	if checkout.DefaultWorkflow != WorkflowPstack || checkout.Workflows[0].DefaultProfile != ExecutionProfileGrill || !checkout.Workflows[0].Profiles[0].RequiresInitialPrompt {
 		t.Fatalf("checkout defaults = %#v", checkout.Workflows[0])
 	}
 	for _, workflow := range got.Workflows {

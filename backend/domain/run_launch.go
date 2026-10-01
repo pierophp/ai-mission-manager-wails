@@ -25,11 +25,11 @@ func RunLaunchOptionsFor(state DomainState, itemID int64, target RunLaunchTarget
 	if target != RunTargetCheckout && target != RunTargetWorktree {
 		return RunLaunchOptions{}, DomainError(fmt.Sprintf("unknown Run launch target %q", target))
 	}
-	workflows := make([]RunLaunchWorkflowOptions, 0, 1)
-	for _, workflow := range []Workflow{WorkflowMattPocock} {
+	workflows := make([]RunLaunchWorkflowOptions, 0, 2)
+	for _, workflow := range []Workflow{WorkflowMattPocock, WorkflowPstack} {
 		profiles := make([]RunLaunchProfileOption, 0, 8)
 		for _, profile := range []ExecutionProfile{ExecutionProfileGrill, ExecutionProfileInvestigate, ExecutionProfileImplement, ExecutionProfileReview, ExecutionProfileAutonomous, ExecutionProfilePlan, ExecutionProfilePstackReview, ExecutionProfileCustomPrompt} {
-			if !workflowOffers(workflow, profile) || target == RunTargetWorktree && profile == ExecutionProfileGrill {
+			if !WorkflowOffers(workflow, profile) || target == RunTargetWorktree && profile == ExecutionProfileGrill {
 				continue
 			}
 			configuration := context.ImplementDefaults
@@ -49,12 +49,14 @@ func RunLaunchOptionsFor(state DomainState, itemID int64, target RunLaunchTarget
 		}
 		workflows = append(workflows, RunLaunchWorkflowOptions{Workflow: workflow, DefaultProfile: defaultProfile, Profiles: profiles})
 	}
-	// Pstack launch is implemented by its own launch path. Do not advertise a
-	// workflow here until this Run launcher can start it.
-	return RunLaunchOptions{DefaultWorkflow: WorkflowMattPocock, Workflows: workflows}, nil
+	defaultWorkflow := context.DefaultWorkflow
+	if defaultWorkflow != WorkflowPstack {
+		defaultWorkflow = WorkflowMattPocock
+	}
+	return RunLaunchOptions{DefaultWorkflow: defaultWorkflow, Workflows: workflows}, nil
 }
 
-func workflowOffers(workflow Workflow, profile ExecutionProfile) bool {
+func WorkflowOffers(workflow Workflow, profile ExecutionProfile) bool {
 	if workflow == WorkflowMattPocock {
 		return profile == ExecutionProfileGrill || profile == ExecutionProfileInvestigate || profile == ExecutionProfileImplement || profile == ExecutionProfileReview || profile == ExecutionProfileCustomPrompt
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/piero/ai-mission-manager-wails/backend/domain"
 	"github.com/piero/ai-mission-manager-wails/backend/gitcli"
 	"github.com/piero/ai-mission-manager-wails/backend/persistence"
+	"github.com/piero/ai-mission-manager-wails/backend/pstack"
 )
 
 type runLaunchRequest struct {
@@ -335,13 +336,13 @@ func (r *Runtime) launchRun(request runLaunchRequest) (domain.Run, error) {
 	if strategy.Agent != domain.AgentClaude && strategy.Agent != domain.AgentCodex {
 		return domain.Run{}, errors.New("Run agent must be Claude or Codex")
 	}
-	if strategy.Workflow != domain.WorkflowMattPocock {
-		return domain.Run{}, errors.New("this Run launch path requires the matt-pocock Workflow")
+	if strategy.Workflow != domain.WorkflowMattPocock && strategy.Workflow != domain.WorkflowPstack {
+		return domain.Run{}, fmt.Errorf("unknown Run workflow %q", strategy.Workflow)
 	}
 	if strategy.ExecutionProfile == domain.ExecutionProfileGrill && strategy.Kind != "grill" {
 		return domain.Run{}, errors.New("Grill must use the Grill launch strategy")
 	}
-	if strategy.Kind != "grill" && strategy.ExecutionProfile != domain.ExecutionProfileInvestigate && strategy.ExecutionProfile != domain.ExecutionProfileImplement && strategy.ExecutionProfile != domain.ExecutionProfileReview && strategy.ExecutionProfile != domain.ExecutionProfileCustomPrompt {
+	if strategy.Kind != "grill" && !domain.WorkflowOffers(strategy.Workflow, strategy.ExecutionProfile) {
 		return domain.Run{}, fmt.Errorf("execution profile %q is not offered by workflow %q", strategy.ExecutionProfile, strategy.Workflow)
 	}
 	if strings.TrimSpace(strategy.Prompt) == "" {
@@ -495,6 +496,19 @@ func (r *Runtime) launchRun(request runLaunchRequest) (domain.Run, error) {
 		model = strategy.Configuration.Model
 		effort = strategy.Configuration.Effort
 	}
+	var pstackRoot string
+	if strategy.Workflow == domain.WorkflowPstack {
+		pstackRoot, err = access.ProvisionPstackTree(machine)
+		if err != nil {
+			return domain.Run{}, fmt.Errorf("Could not provision pstack on Machine %s: %w", machine.Name, err)
+		}
+		rolePath := pstack.RoleFilePath(pstackRoot, ctx)
+		roleContents := pstack.ComposeRoleFile(strategy.Agent, ctx.PstackRoles, profileByID(state, ctx.ClaudeProfileID, machine.ID), profileByID(state, ctx.CodexProfileID, machine.ID))
+		if err := access.WriteFile(machine, rolePath, roleContents); err != nil {
+			return domain.Run{}, fmt.Errorf("Could not write pstack role instructions: %w", err)
+		}
+		strategy.Prompt = pstackRunPrompt(strategy.Prompt, pstackRoot, rolePath, strategy.ExecutionProfile)
+	}
 	pane, err := executor.Launch(machine, session, gate, cwd, executable, strategy.Prompt, strategy.Agent, fmt.Sprint(runID), stateFile, model, effort, profileDirectory)
 	if err != nil {
 		return domain.Run{}, err
@@ -516,6 +530,10 @@ func (r *Runtime) launchRun(request runLaunchRequest) (domain.Run, error) {
 		return cleanup(errors.New("the Item, Workspace, Repository, Worktree, or Machine changed before the Run could be recorded; review it again"))
 	}
 	run := domain.Run{ID: runID, ItemID: item.ID, WorkspaceID: int64Ptr(workspace.ID), MachineID: machine.ID, Agent: strategy.Agent, ExecutionProfile: strategy.ExecutionProfile, Workflow: strategy.Workflow, Prompt: strategy.Prompt, WorkingDirectory: cwd, SessionName: session, PaneID: pane, StartedAt: time.Now().Unix(), State: domain.RunUnknown, PaneStatus: domain.PaneAvailable, DirectCheckouts: checkouts, ReportedPullRequests: []string{}, GrillAnswers: []domain.GrillAnswer{}, GrillDecisions: []domain.GrillAnswer{}}
+	if strategy.Workflow == domain.WorkflowPstack {
+		snapshot := pstack.SkillSnapshot()
+		run.SkillSnapshot = &snapshot
+	}
 	if strategy.Kind == "direct" || strategy.Kind == "grill" {
 		id := strategy.PrimaryRepositoryID
 		run.RepositoryID = &id
@@ -675,6 +693,30 @@ func nullableProfile(p *domain.CLIConfigurationProfileIdentity) any {
 	}
 	b, _ := json.Marshal(p)
 	return string(b)
+}
+
+func profileByID(state domain.DomainState, id *int64, machineID int64) *domain.CLIConfigurationProfile {
+	if id == nil {
+		return nil
+	}
+	for index := range state.CLIConfigurationProfiles {
+		profile := &state.CLIConfigurationProfiles[index]
+		if profile.ID == *id && profile.MachineID == machineID {
+			return profile
+		}
+	}
+	return nil
+}
+
+func pstackRunPrompt(prompt, root, rolePath string, profile domain.ExecutionProfile) string {
+	instruction := fmt.Sprintf("Read `%s/skills/poteto-mode/SKILL.md` in full before acting. The Skill tool is unavailable for these embedded skills; read any other pstack skill by its absolute path under `%s/skills/`. Read the generated role instructions at `%s` and follow them when delegating.", root, root, rolePath)
+	if profile == domain.ExecutionProfilePlan {
+		instruction = fmt.Sprintf("Read `%s/skills/poteto-mode/SKILL.md` and follow `%s/skills/poteto-mode/playbooks/multi-phase-plan.md` in full. Read both by their absolute paths. Read the generated role instructions at `%s` and follow them when delegating. Complete the required planning phases, write the plan in the repository, then stop without implementing it. Report its repository-relative path. Do not delegate implementation.", root, root, rolePath)
+	}
+	if profile == domain.ExecutionProfilePstackReview {
+		instruction = fmt.Sprintf("Read `%s/skills/interrogate/SKILL.md` and follow it to review the Pull Request or branch named in the Initial Prompt. Read the generated role instructions at `%s` and use its Review panel entry to configure the read-only reviewers. Review only; do not edit files, commit, push, or apply suggestions. Synthesize the reviewers' findings into a verdict.", root, rolePath)
+	}
+	return strings.TrimSpace(instruction + "\n\n" + prompt)
 }
 
 func (r *Runtime) prepareDirectRun(itemID, workspaceID int64, machineID *int64) (DirectRunPreview, error) {
