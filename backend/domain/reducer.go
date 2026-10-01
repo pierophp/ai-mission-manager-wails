@@ -675,6 +675,13 @@ func Decide(input DomainState, event Event) (Decision, error) {
 			}
 		}
 		return Decision{State: state, Effects: effects}, nil
+	case "link_external_object":
+		if event.ExternalObject == nil {
+			return Decision{}, DomainError("External Object identity is required")
+		}
+		return decideLinkExternalObject(state, event.ItemID, *event.ExternalObject, event.ExternalSnapshot)
+	case "refresh_external_object":
+		return decideRefreshExternalObject(state, event.ExternalObjectID, event.ExternalSnapshot)
 	case "create_item":
 		title := strings.TrimSpace(event.Name)
 		if title == "" {

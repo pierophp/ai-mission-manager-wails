@@ -43,6 +43,9 @@ type Event struct {
 	BaseBranch         string
 	CheckoutPath       string
 	WorktreeRoot       string
+	ExternalObject     *ExternalObject
+	ExternalSnapshot   *ExternalSnapshot
+	ExternalObjectID   int64
 }
 
 type ContextConfiguration struct {
@@ -78,6 +81,11 @@ type Effect struct {
 	PreviousMachineID  *int64
 	AttentionDefaults  []ContextAttentionDefault
 	Workspace          *Workspace
+	ExternalObject     *ExternalObject
+	ExternalLink       *Link
+	ExternalSnapshot   *ExternalSnapshot
+	ExternalActivity   *Activity
+	ExternalObjectID   int64
 }
 
 type Decision struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/piero/ai-mission-manager-wails/backend/domain"
 	_ "modernc.org/sqlite"
 )
 
@@ -168,6 +170,183 @@ func TestItemsCommandsPersistAndHomeGoldenJSON(t *testing.T) {
 	var state = reopened.home(nil, "2026-09-30T09:15")
 	if len(state.Running) != 1 || state.Running[0].Item.Title != "Updated title" || state.Running[0].Item.Notes != "updated notes" || len(state.Running[0].Relationships) != 1 {
 		t.Fatalf("reopened home state = %#v", state)
+	}
+}
+
+func TestExternalObjectCommandsUseGHAdapterPersistSnapshotsAndActivities(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "mission-manager.sqlite")
+	rt, err := OpenRuntime(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	ghPath := filepath.Join(t.TempDir(), "gh")
+	script := `#!/bin/sh
+case "$*" in
+*"--json number,title,state,author,labels,milestone,createdAt,updatedAt") printf '{"number":7,"title":"%s","state":"OPEN","author":{"login":"piero"},"labels":[],"milestone":null,"createdAt":"2026-01-01","updatedAt":"2026-01-02"}' "$GH_SNAPSHOT_TITLE" ;;
+*"--json body") printf '%s' '{"body":"Issue body"}' ;;
+*"/sub_issues "*) printf '%s\n' '{"number":8,"title":"Child","state":"OPEN","html_url":"https://github.com/acme/app/issues/8"}' ;;
+*"/comments --paginate --slurp") printf '%s' '[[{"id":4,"user":{"login":"piero"},"body":"Comment","created_at":"2026-01-03"}]]' ;;
+"issue comment "*) exit 0 ;;
+*) echo "unexpected gh args: $*" >&2; exit 2;;
+esac
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_SNAPSHOT_TITLE", "Before")
+	service := CommandService{Runtime: rt}
+	if _, err = service.Invoke("create_item", `{"title":"Track upstream","contextId":1,"projectId":1,"notes":null}`); err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultContextConfiguration()
+	cfg.Name = "Personal"
+	cfg.GHExecutablePath = &ghPath
+	for i := range cfg.AttentionDefaults {
+		cfg.AttentionDefaults[i].ContextID = 1
+	}
+	if _, err = service.Invoke("update_context_configuration", mustJSON(t, map[string]any{"contextId": 1, "configuration": cfg})); err != nil {
+		t.Fatal(err)
+	}
+	linked, err := service.Invoke("link_external_object", `{"itemId":1,"url":"https://github.com/Acme/App/issues/7?view=full"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action ExternalLinkAction
+	if err = json.Unmarshal(linked, &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Link.Object.CanonicalURL != "https://github.com/acme/app/issues/7" || action.Link.Snapshot == nil || action.Link.Snapshot.Title != "Before" {
+		t.Fatalf("link result = %s", linked)
+	}
+	duplicate, err := service.Invoke("link_external_object", `{"itemId":1,"url":"https://github.com/acme/app/issues/7"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var second ExternalLinkAction
+	if err = json.Unmarshal(duplicate, &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.Link.Link.ID != action.Link.Link.ID {
+		t.Fatalf("link was not deduplicated: %s", duplicate)
+	}
+	doc, err := service.Invoke("fetch_issue_document", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var issueDoc IssueDocument
+	if err = json.Unmarshal(doc, &issueDoc); err != nil || issueDoc.Body != "Issue body" || len(issueDoc.SubIssues) != 1 {
+		t.Fatalf("issue document %s (%v)", doc, err)
+	}
+	comments, err := service.Invoke("fetch_external_comments", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(comments), `"author":"piero"`) {
+		t.Fatalf("comments %s", comments)
+	}
+	if _, err = service.Invoke("add_external_comment", fmt.Sprintf(`{"linkId":%d,"body":"Please review"}`, action.Link.Link.ID)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_SNAPSHOT_TITLE", "After")
+	refreshed, err := service.Invoke("refresh_external_object", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot domain.ExternalSnapshot
+	if err = json.Unmarshal(refreshed, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Title != "After" {
+		t.Fatalf("refresh = %s", refreshed)
+	}
+	activities := rt.activityTab().Activities
+	if len(activities) != 1 || len(activities[0].Activity.Changes) == 0 {
+		t.Fatalf("Activity projection = %#v", activities)
+	}
+	var raw []byte
+	for _, entry := range activities[0].Activity.Changes {
+		if entry.Kind == "title" {
+			raw, _ = json.Marshal(entry)
+			break
+		}
+	}
+	if string(raw) != `{"kind":"title","key":null,"previous":"Before","current":"After"}` {
+		t.Fatalf("title change JSON = %s", raw)
+	}
+	if _, err = service.Invoke("poll_external_objects", `{}`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAzureDevOpsIdentityCollisionReturnsDomainErrorBeforeSQLite(t *testing.T) {
+	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "mission-manager.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	service := CommandService{Runtime: rt}
+	if _, err = service.Invoke("create_item", `{"title":"Track Azure work","contextId":1,"projectId":1,"notes":null}`); err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Invoke("link_external_object", `{"itemId":1,"url":"https://dev.azure.com/acme/app/_workitems/edit/42"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action ExternalLinkAction
+	if err = json.Unmarshal(first, &action); err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Invoke("link_external_object", `{"itemId":1,"url":"https://dev.azure.com/acme/app/_git/frontend/pullrequest/42"}`)
+	if err == nil || !strings.Contains(err.Error(), "identity collision") {
+		t.Fatalf("expected explicit Rust-compatible Azure identity collision, got %v", err)
+	}
+}
+
+func TestCreateGitHubIssueCommandUsesRepositoryAndLinksCreatedIssue(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "mission-manager.sqlite")
+	rt, err := OpenRuntime(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	ghPath := filepath.Join(t.TempDir(), "gh")
+	script := `#!/bin/sh
+case "$*" in
+"api repos/acme/app/issues --method POST"*) printf '%s' '{"html_url":"https://github.com/Acme/App/issues/44"}' ;;
+*"--json number,title,state,author,labels,milestone,createdAt,updatedAt") printf '%s' '{"number":44,"title":"Created","state":"OPEN","author":null,"labels":[],"milestone":null,"createdAt":"2026-01-01","updatedAt":"2026-01-02"}' ;;
+*) echo "unexpected gh args: $*" >&2; exit 2;;
+esac
+`
+	if err := os.WriteFile(ghPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	service := CommandService{Runtime: rt}
+	if _, err = service.Invoke("create_item", `{"title":"Create upstream issue","contextId":1,"projectId":1,"notes":null}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.Invoke("register_repository", `{"projectId":1,"name":"app","remoteUrl":"ssh://git@github.com/acme/app.git"}`); err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultContextConfiguration()
+	cfg.Name = "Personal"
+	cfg.GHExecutablePath = &ghPath
+	for i := range cfg.AttentionDefaults {
+		cfg.AttentionDefaults[i].ContextID = 1
+	}
+	if _, err = service.Invoke("update_context_configuration", mustJSON(t, map[string]any{"contextId": 1, "configuration": cfg})); err != nil {
+		t.Fatal(err)
+	}
+	created, err := service.Invoke("create_github_issue", `{"itemId":1,"repositoryId":1,"title":"Created","body":"Body"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action ExternalLinkAction
+	if err = json.Unmarshal(created, &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Link.Object.CanonicalURL != "https://github.com/acme/app/issues/44" || action.Link.Snapshot == nil {
+		t.Fatalf("created Issue was not linked with snapshot: %s", created)
 	}
 }
 

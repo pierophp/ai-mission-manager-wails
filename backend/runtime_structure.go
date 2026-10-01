@@ -65,7 +65,7 @@ func (r *Runtime) persistDecisionLocked(snapshot domain.DomainState, decision *d
 }
 
 func sameSequences(a, b domain.DomainState) bool {
-	return a.NextContextID == b.NextContextID && a.NextProjectID == b.NextProjectID && a.NextRepositoryID == b.NextRepositoryID && a.NextWorkspaceID == b.NextWorkspaceID && a.NextItemID == b.NextItemID && a.NextAuditID == b.NextAuditID
+	return a.NextContextID == b.NextContextID && a.NextProjectID == b.NextProjectID && a.NextRepositoryID == b.NextRepositoryID && a.NextWorkspaceID == b.NextWorkspaceID && a.NextItemID == b.NextItemID && a.NextExternalObjectID == b.NextExternalObjectID && a.NextLinkID == b.NextLinkID && a.NextActivityID == b.NextActivityID && a.NextAuditID == b.NextAuditID
 }
 
 func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persistence.AuditAction, error) {
@@ -188,6 +188,42 @@ func persistenceEffects(effects []domain.Effect) ([]persistence.Effect, []persis
 				out = append(out, attentionEffect(d))
 				audit = append(audit, attentionAuditJSON(d))
 			}
+		case "persist_external_object":
+			o := effect.ExternalObject
+			if o == nil {
+				return nil, nil, errors.New("external object effect has no External Object")
+			}
+			out = append(out, persistence.Effect{SQL: `INSERT INTO external_objects(id,provider,kind,external_key,canonical_url) VALUES(?,?,?,?,?)`, Args: []any{o.ID, o.Provider, o.Kind, o.ExternalKey, o.CanonicalURL}, InsertedSequence: "next_external_object_id", InsertedID: o.ID})
+			audit = append(audit, auditJSON("externalObjectCreated", "external_object_id", o.ID))
+		case "persist_external_link":
+			link := effect.ExternalLink
+			if link == nil {
+				return nil, nil, errors.New("external link effect has no Link")
+			}
+			out = append(out, persistence.Effect{SQL: `INSERT INTO external_links(id,item_id,external_object_id,purpose,spec_external_object_id) VALUES(?,?,?,?,?)`, Args: []any{link.ID, link.ItemID, link.ExternalObjectID, link.Purpose, link.SpecExternalObjectID}, InsertedSequence: "next_link_id", InsertedID: link.ID})
+			audit = append(audit, auditJSON("linkCreated", "link_id", link.ID))
+		case "persist_external_snapshot":
+			snapshot := effect.ExternalSnapshot
+			if snapshot == nil {
+				return nil, nil, errors.New("external snapshot effect has no snapshot")
+			}
+			metadata, err := json.Marshal(snapshot.Metadata)
+			if err != nil {
+				return nil, nil, err
+			}
+			out = append(out, persistence.Effect{SQL: `INSERT INTO external_snapshots(external_object_id,title,state,metadata_json,fetched_at) VALUES(?,?,?,?,?) ON CONFLICT(external_object_id) DO UPDATE SET title=excluded.title,state=excluded.state,metadata_json=excluded.metadata_json,fetched_at=excluded.fetched_at`, Args: []any{snapshot.ExternalObjectID, snapshot.Title, snapshot.State, string(metadata), snapshot.FetchedAt}})
+		case "persist_external_activity":
+			activity := effect.ExternalActivity
+			if activity == nil {
+				return nil, nil, errors.New("external activity effect has no Activity")
+			}
+			changes, err := json.Marshal(activity.Changes)
+			if err != nil {
+				return nil, nil, err
+			}
+			out = append(out, persistence.Effect{SQL: `INSERT INTO activities(id,external_object_id,observed_at,changes_json) VALUES(?,?,?,?)`, Args: []any{activity.ID, activity.ExternalObjectID, activity.ObservedAt, string(changes)}, InsertedSequence: "next_activity_id", InsertedID: activity.ID})
+		case "external_object_refreshed":
+			audit = append(audit, auditJSON("externalObjectRefreshed", "external_object_id", effect.ExternalObjectID))
 		default:
 			itemEffects, itemAudit, handled, itemErr := itemPersistenceEffects(effect)
 			if itemErr != nil {

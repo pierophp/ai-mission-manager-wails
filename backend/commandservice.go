@@ -516,6 +516,75 @@ var commandHandlers = map[string]commandHandler{
 		}
 		return s.Runtime.runEvent(domain.Event{Kind: "set_item_relation", FromItemID: a.FromItemID, ToItemID: a.ToItemID, RelationKind: a.Kind})
 	}),
+	"link_external_object": withArgs([]string{"itemId", "url"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID int64  `json:"itemId"`
+			URL    string `json:"url"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.linkExternalObject(a.ItemID, a.URL)
+	}),
+	"create_github_issue": withArgs([]string{"itemId", "repositoryId", "title", "body"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ItemID       int64  `json:"itemId"`
+			RepositoryID int64  `json:"repositoryId"`
+			Title        string `json:"title"`
+			Body         string `json:"body"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.createGithubIssue(a.ItemID, a.RepositoryID, a.Title, a.Body)
+	}),
+	"add_external_comment": withArgs([]string{"linkId", "body"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			LinkID int64  `json:"linkId"`
+			Body   string `json:"body"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.addExternalComment(a.LinkID, a.Body)
+	}),
+	"fetch_issue_document": withArgs([]string{"externalObjectId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ExternalObjectID int64 `json:"externalObjectId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.fetchIssueDocument(a.ExternalObjectID)
+	}),
+	"fetch_external_comments": withArgs([]string{"externalObjectId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ExternalObjectID int64 `json:"externalObjectId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.fetchExternalComments(a.ExternalObjectID)
+	}),
+	"fetch_external_document": withArgs([]string{"externalObjectId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ExternalObjectID int64 `json:"externalObjectId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.fetchExternalDocument(a.ExternalObjectID)
+	}),
+	"refresh_external_object": withArgs([]string{"externalObjectId"}, func(s *CommandService, raw json.RawMessage) (any, error) {
+		var a struct {
+			ExternalObjectID int64 `json:"externalObjectId"`
+		}
+		if e := decodeArgs(raw, &a); e != nil {
+			return nil, e
+		}
+		return s.Runtime.refreshExternalObject(a.ExternalObjectID)
+	}),
+	"poll_external_objects": noArgs(func(s *CommandService) (any, error) { return s.Runtime.pollExternalObjects() }),
 }
 
 var registeredCommandArguments = map[string][]string{
@@ -526,6 +595,7 @@ var registeredCommandArguments = map[string][]string{
 	"set_context_attention_default": {"contextId", "objectKind", "policy"}, "create_project": {"name", "contextId", "defaultItemStatus", "executionMode"}, "update_project": {"projectId", "name", "defaultItemStatus", "executionMode"},
 	"register_repository": {"projectId", "name", "remoteUrl"}, "update_repository": {"repositoryId", "name", "remoteUrl", "baseBranch"}, "register_repository_at_location": {"projectId", "name", "remoteUrl", "baseBranch", "machineId", "checkoutPath", "worktreeRoot", "cloneIntoDestination"}, "update_repository_location": {"repositoryId", "previousMachineId", "machineId", "checkoutPath", "worktreeRoot"},
 	"get_home": {"contextId", "now"}, "search_items_command": {"query", "contextId"}, "list_inbox_items": {}, "create_item": {"title", "contextId", "projectId", "notes"}, "set_item_status": {"itemId", "status"}, "set_item_title": {"itemId", "title"}, "set_item_notes": {"itemId", "notes"}, "add_item_reminder": {"itemId", "remindAt"}, "remove_item_reminder": {"itemId", "reminderId"}, "set_item_relation": {"fromItemId", "toItemId", "kind"},
+	"link_external_object": {"itemId", "url"}, "create_github_issue": {"itemId", "repositoryId", "title", "body"}, "add_external_comment": {"linkId", "body"}, "fetch_issue_document": {"externalObjectId"}, "fetch_external_comments": {"externalObjectId"}, "fetch_external_document": {"externalObjectId"}, "refresh_external_object": {"externalObjectId"}, "poll_external_objects": {},
 }
 
 func (s *CommandService) Invoke(command string, argsJSON string) (json.RawMessage, error) {
