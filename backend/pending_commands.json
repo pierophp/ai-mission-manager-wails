@@ -1,11 +1,1 @@
-[
-  "list_machines",
-  "list_cli_configuration_profiles",
-  "create_cli_configuration_profile",
-  "set_context_cli_configuration_profile",
-  "delete_cli_configuration_profile",
-  "set_context_execution_machine",
-  "register_machine",
-  "update_machine",
-  "check_machine"
-]
+[]

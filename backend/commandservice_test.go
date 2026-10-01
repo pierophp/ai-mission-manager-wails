@@ -718,6 +718,9 @@ func TestBindingsCommandsAreRegisteredOrPendingWithExactArgumentKeys(t *testing.
 	if err := json.Unmarshal(pendingJSON, &pending); err != nil {
 		t.Fatal(err)
 	}
+	if len(pending) != 0 {
+		t.Fatalf("pending command list must be empty after the full bindings contract is implemented; found %v", pending)
+	}
 	pendingSet := make(map[string]bool, len(pending))
 	for _, command := range pending {
 		if pendingSet[command] {

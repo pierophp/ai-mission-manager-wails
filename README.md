@@ -8,6 +8,11 @@ Aplicativo desktop com Go + Wails v3, React, TypeScript e Vite+ (`vp`), uma tool
 - Node.js e npm (o `vite-plus` local disponibiliza a CLI `vp`; não exige instalação global)
 - Wails CLI v3 (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`)
 - Dependências nativas da plataforma: veja [instalação do Wails](https://v3.wails.io/quick-start/installation/)
+- `git` e `tmux` no `PATH` para operações com repositórios e Runs
+- CLIs dos providers que você usa: `gh` para GitHub, `twg` para Atlassian e `az` para Azure DevOps
+- `claude` e/ou `codex` no `PATH` para iniciar Runs com esses agentes
+
+O setup e a tela de saúde mostram quais dependências estão disponíveis. Instale apenas os CLIs dos providers e agentes que pretende usar.
 
 ## Desenvolvimento
 
@@ -24,6 +29,8 @@ wails3 build
 ```
 
 O frontend fica em `frontend/`, o backend Go começa em `main.go` e as configurações de build ficam em `build/`.
+
+No macOS, instale as ferramentas nativas exigidas pelo Wails e então execute `wails3 build`; o binário é gerado em `bin/`.
 
 ## Banco de dados e migração do Tauri
 
