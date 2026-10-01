@@ -3,7 +3,11 @@ package backend
 import (
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -189,15 +193,15 @@ func domainHasExternalObject(s domain.DomainState, id int64) bool {
 }
 
 func (r *Runtime) linkExternalObject(itemID int64, rawURL string) (ExternalLinkAction, error) {
-	object, err := classifyExternalURL(rawURL)
-	if err != nil {
-		return ExternalLinkAction{}, err
-	}
 	ctx, err := r.itemContext(itemID)
 	if err != nil {
 		return ExternalLinkAction{}, err
 	}
 	s, err := r.stateSnapshot()
+	if err != nil {
+		return ExternalLinkAction{}, err
+	}
+	object, err := r.classifyExternalForItem(s, itemID, rawURL, ctx)
 	if err != nil {
 		return ExternalLinkAction{}, err
 	}
@@ -210,20 +214,24 @@ func (r *Runtime) linkExternalObject(itemID int64, rawURL string) (ExternalLinkA
 	}
 	var fetched *externalSnapshot
 	warning := ""
-	if prior == nil && object.Provider == "github" {
-		cli, e := newGHCLI(ctx.GHExecutablePath)
+	if prior == nil {
+		value, e := r.fetchSnapshotForObject(s, ctx, object)
 		if e != nil {
 			warning = e.Error()
-		} else {
-			value, e := cli.fetchSnapshot(object, currentUnixSeconds())
-			if e != nil {
-				warning = e.Error()
-			} else {
-				fetched = &value
-			}
+		} else if value != nil {
+			fetched = value
 		}
-	} else if prior == nil && object.Provider != "generic" {
-		warning = fmt.Sprintf("The %s provider is classified but is not available in this build.", object.Provider)
+	}
+	if mismatch := contextProviderMismatchWarning(ctx, object.URL); mismatch != "" {
+		warningBase := strings.TrimSpace(strings.TrimSuffix(mismatch, " The Link was created."))
+		if warning != "" && !strings.Contains(warning, warningBase) {
+			warning += "; "
+		}
+		if !strings.Contains(warning, warningBase) {
+			warning += mismatch
+		} else if !strings.Contains(warning, "The Link was created") {
+			warning += " The Link was created."
+		}
 	}
 	input := domain.ExternalObject{Provider: domain.ExternalProvider(object.Provider), Kind: domain.ExternalObjectKind(object.Kind), ExternalKey: object.Key, CanonicalURL: object.URL}
 	var snapshot *domain.ExternalSnapshot
@@ -258,6 +266,242 @@ func (r *Runtime) linkExternalObject(itemID int64, rawURL string) (ExternalLinkA
 		warningPtr = &warning
 	}
 	return ExternalLinkAction{Link: view, Warning: warningPtr}, nil
+}
+
+func contextProviderMismatchWarning(context domain.Context, rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	path := strings.Trim(parsed.EscapedPath(), "/")
+	if strings.HasSuffix(host, ".atlassian.net") && context.AtlassianSite != nil {
+		configured := strings.ToLower(strings.TrimSpace(*context.AtlassianSite))
+		configured = strings.TrimSuffix(strings.TrimPrefix(configured, "https://"), "/")
+		configured = strings.TrimSuffix(configured, ".atlassian.net")
+		if site := strings.TrimSuffix(host, ".atlassian.net"); configured != "" && site != configured {
+			return fmt.Sprintf("This External Object targets a different site or organization than the identifiers configured for Context '%s'. The Link was created.", context.Name)
+		}
+	}
+	if host == "bitbucket.org" && context.BitbucketWorkspace != nil {
+		configured := strings.ToLower(strings.TrimSpace(*context.BitbucketWorkspace))
+		workspace, _, _ := strings.Cut(path, "/")
+		if configured != "" && workspace != "" && configured != workspace {
+			return fmt.Sprintf("This External Object targets a different site or organization than the identifiers configured for Context '%s'. The Link was created.", context.Name)
+		}
+	}
+	if host == "dev.azure.com" && context.AzureDevOpsOrganization != nil {
+		configured := strings.ToLower(strings.TrimSpace(*context.AzureDevOpsOrganization))
+		configured = strings.TrimSuffix(configured, "/")
+		configured = strings.TrimPrefix(configured, "https://")
+		if strings.Contains(configured, "/") {
+			configured = pathBase(configured)
+		}
+		organization, _, _ := strings.Cut(path, "/")
+		if configured != "" && organization != "" && configured != organization {
+			return fmt.Sprintf("This External Object targets a different site or organization than the identifiers configured for Context '%s'. The Link was created.", context.Name)
+		}
+	}
+	return ""
+}
+
+func validateProviderContextTarget(context domain.Context, object classifiedExternalObject) error {
+	warning := contextProviderMismatchWarning(context, object.URL)
+	if warning == "" {
+		return nil
+	}
+	return errors.New(strings.TrimSpace(strings.TrimSuffix(warning, " The Link was created.")))
+}
+
+func pathBase(value string) string {
+	_, tail, ok := strings.Cut(value, "/")
+	if !ok {
+		return value
+	}
+	if strings.Contains(tail, "/") {
+		return pathBase(tail)
+	}
+	return tail
+}
+
+func (r *Runtime) classifyExternalForItem(state domain.DomainState, itemID int64, raw string, context domain.Context) (classifiedExternalObject, error) {
+	trimmed := strings.TrimSpace(raw)
+	if !looksLikeLocalMarkdown(trimmed) {
+		return classifyExternalURL(trimmed)
+	}
+	item, _, err := itemAndContext(state, itemID)
+	if err != nil {
+		return classifiedExternalObject{}, err
+	}
+	project, ok := projectByID(state, item.ProjectID)
+	if !ok {
+		return classifiedExternalObject{}, fmt.Errorf("Project %d does not exist", item.ProjectID)
+	}
+	machine, ok := localExecutionMachine(state, context, r.machineAccess)
+	if !ok {
+		return classifiedExternalObject{}, errors.New("Local Markdown links require a local execution Machine")
+	}
+	for _, repo := range state.Repositories {
+		if repo.ProjectID != project.ID {
+			continue
+		}
+		for _, location := range state.RepositoryLocations {
+			if location.RepositoryID != repo.ID || location.MachineID != machine.ID {
+				continue
+			}
+			object, e := classifyLocalMarkdown(repo.ID, location.CheckoutPath, trimmed)
+			if e == nil {
+				return object, nil
+			}
+		}
+	}
+	return classifiedExternalObject{}, errors.New("Local Markdown files must be inside a registered Repository main checkout")
+}
+
+func projectByID(state domain.DomainState, id int64) (domain.Project, bool) {
+	for _, project := range state.Projects {
+		if project.ID == id {
+			return project, true
+		}
+	}
+	return domain.Project{}, false
+}
+
+func localExecutionMachine(state domain.DomainState, context domain.Context, access MachineAccess) (domain.Machine, bool) {
+	if context.ExecutionMachineID == nil || access == nil {
+		return domain.Machine{}, false
+	}
+	for _, machine := range state.Machines {
+		if machine.ID == *context.ExecutionMachineID && access.IsLocal(machine) {
+			return machine, true
+		}
+	}
+	return domain.Machine{}, false
+}
+
+func looksLikeLocalMarkdown(raw string) bool {
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return false
+	}
+	if strings.HasPrefix(raw, "file://") {
+		raw = strings.TrimPrefix(raw, "file://")
+	}
+	ext := strings.ToLower(filepath.Ext(raw))
+	return ext == ".md" || ext == ".markdown"
+}
+
+func (r *Runtime) localMarkdownPath(state domain.DomainState, context domain.Context, key string) (string, error) {
+	reference, ok := strings.CutPrefix(key, "local:")
+	if !ok {
+		return "", errors.New("This local Markdown link has an invalid repository path")
+	}
+	idAndPath, relative, ok := strings.Cut(reference, "#")
+	if !ok || relative == "" {
+		return "", errors.New("This local Markdown link has an invalid repository path")
+	}
+	repositoryID, err := strconv.ParseInt(idAndPath, 10, 64)
+	if err != nil {
+		return "", errors.New("This local Markdown link has an invalid repository path")
+	}
+	machine, ok := localExecutionMachine(state, context, r.machineAccess)
+	if !ok {
+		return "", errors.New("Local Markdown tracker requires a local execution Machine")
+	}
+	var repository *domain.Repository
+	for i := range state.Repositories {
+		if state.Repositories[i].ID == repositoryID {
+			repository = &state.Repositories[i]
+			break
+		}
+	}
+	if repository == nil {
+		return "", errors.New("The Repository for this local Markdown link is unavailable")
+	}
+	if !stateProjectInContext(state, repository.ProjectID, context.ID) {
+		return "", errors.New("The Repository for this local Markdown link is unavailable")
+	}
+	var root string
+	for _, location := range state.RepositoryLocations {
+		if location.RepositoryID == repositoryID && location.MachineID == machine.ID {
+			root = location.CheckoutPath
+			break
+		}
+	}
+	if root == "" {
+		return "", fmt.Errorf("Repository '%s' has no main checkout registered on local Machine '%s'", repository.Name, machine.Name)
+	}
+	clean := filepath.Clean(filepath.FromSlash(relative))
+	if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || (strings.ToLower(filepath.Ext(clean)) != ".md" && strings.ToLower(filepath.Ext(clean)) != ".markdown") {
+		return "", errors.New("This local Markdown link has an invalid repository path")
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("Could not read Repository '%s' main checkout: %w", repository.Name, err)
+	}
+	path, err := filepath.EvalSymlinks(filepath.Join(root, clean))
+	if err != nil {
+		return "", fmt.Errorf("Local Markdown file '%s' is missing or unreadable in Repository '%s' main checkout: %w", relative, repository.Name, err)
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errors.New("The local Markdown file is outside its registered Repository checkout")
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", errors.New("The local Markdown file is not a regular file")
+	}
+	return path, nil
+}
+
+func stateProjectInContext(state domain.DomainState, projectID, contextID int64) bool {
+	for _, p := range state.Projects {
+		if p.ID == projectID && p.ContextID == contextID {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runtime) fetchSnapshotForObject(state domain.DomainState, context domain.Context, object classifiedExternalObject) (*externalSnapshot, error) {
+	switch object.Provider {
+	case domain.ProviderGitHub:
+		cli, err := newGHCLI(context.GHExecutablePath)
+		if err != nil {
+			return nil, err
+		}
+		snapshot, err := cli.fetchSnapshot(object, currentUnixSeconds())
+		if err != nil {
+			return nil, err
+		}
+		return &snapshot, nil
+	case domain.ProviderAtlassian:
+		snapshot, err := fetchAtlassianSnapshot(context, object, currentUnixSeconds())
+		if err != nil {
+			return nil, err
+		}
+		return &snapshot, nil
+	case domain.ProviderAzureDevOps:
+		snapshot, err := fetchAzureSnapshot(context, object, currentUnixSeconds())
+		if err != nil {
+			return nil, err
+		}
+		return &snapshot, nil
+	case domain.ProviderGeneric:
+		if strings.HasPrefix(object.Key, "local:") {
+			path, err := r.localMarkdownPath(state, context, object.Key)
+			if err != nil {
+				return nil, err
+			}
+			snapshot, err := readLocalMarkdownSnapshot(path, currentUnixSeconds())
+			if err != nil {
+				return nil, err
+			}
+			return &snapshot, nil
+		}
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("snapshot fetching is not implemented for %s", object.Provider)
+	}
 }
 
 func (r *Runtime) createGithubIssue(itemID, repositoryID int64, title, body string) (ExternalLinkAction, error) {
@@ -367,43 +611,115 @@ func (r *Runtime) fetchIssueDocument(id int64) (IssueDocument, error) {
 	if e != nil {
 		return IssueDocument{}, e
 	}
-	if o.Provider != domain.ProviderGitHub || o.Kind != domain.ObjectIssue {
-		return IssueDocument{}, errors.New("Only GitHub Issues can be read as an issue document")
+	object := classifiedExternalObject{o.Provider, o.Kind, o.ExternalKey, o.CanonicalURL}
+	switch o.Provider {
+	case domain.ProviderGitHub:
+		if o.Kind != domain.ObjectIssue {
+			return IssueDocument{}, errors.New("Only GitHub Issues can be read as an issue document")
+		}
+		cli, err := newGHCLI(c.GHExecutablePath)
+		if err != nil {
+			return IssueDocument{}, err
+		}
+		doc, err := cli.fetchIssueDocument(object)
+		return IssueDocument{doc.Body, doc.BodyFormat, doc.SubIssues}, err
+	case domain.ProviderAtlassian:
+		if o.Kind != domain.ObjectIssue {
+			return IssueDocument{}, errors.New("Only Jira work items can be read as an issue document")
+		}
+		body, err := fetchAtlassianDocument(c, object)
+		return IssueDocument{Body: body, BodyFormat: "markdown", SubIssues: []subIssue{}}, err
+	case domain.ProviderAzureDevOps:
+		if o.Kind != domain.ObjectIssue {
+			return IssueDocument{}, errors.New("Only Azure DevOps work items can be read as an issue document")
+		}
+		body, err := fetchAzureDocument(c, object)
+		return IssueDocument{Body: body, BodyFormat: "html", SubIssues: []subIssue{}}, err
+	case domain.ProviderGeneric:
+		if !strings.HasPrefix(o.ExternalKey, "local:") {
+			return IssueDocument{}, errors.New("Only local Markdown links have a readable issue document")
+		}
+		s, err := r.stateSnapshot()
+		if err != nil {
+			return IssueDocument{}, err
+		}
+		path, err := r.localMarkdownPath(s, c, o.ExternalKey)
+		if err != nil {
+			return IssueDocument{}, err
+		}
+		return readLocalMarkdownDocument(path, o.ExternalKey)
+	default:
+		return IssueDocument{}, fmt.Errorf("issue document reading is not implemented for %s", o.Provider)
 	}
-	cli, e := newGHCLI(c.GHExecutablePath)
-	if e != nil {
-		return IssueDocument{}, e
-	}
-	doc, e := cli.fetchIssueDocument(classifiedExternalObject{o.Provider, o.Kind, o.ExternalKey, o.CanonicalURL})
-	return IssueDocument{doc.Body, doc.BodyFormat, doc.SubIssues}, e
 }
 func (r *Runtime) fetchExternalDocument(id int64) (string, error) {
 	o, c, e := r.objectAndContext(id)
 	if e != nil {
 		return "", e
 	}
-	if o.Provider != domain.ProviderGitHub {
+	object := classifiedExternalObject{o.Provider, o.Kind, o.ExternalKey, o.CanonicalURL}
+	switch o.Provider {
+	case domain.ProviderGitHub:
+		cli, err := newGHCLI(c.GHExecutablePath)
+		if err != nil {
+			return "", err
+		}
+		return cli.fetchDocument(object)
+	case domain.ProviderAtlassian:
+		return fetchAtlassianDocument(c, object)
+	case domain.ProviderAzureDevOps:
+		return fetchAzureDocument(c, object)
+	case domain.ProviderGeneric:
+		if !strings.HasPrefix(o.ExternalKey, "local:") {
+			return "", fmt.Errorf("document reading is not implemented for %s", o.Provider)
+		}
+		s, err := r.stateSnapshot()
+		if err != nil {
+			return "", err
+		}
+		path, err := r.localMarkdownPath(s, c, o.ExternalKey)
+		if err != nil {
+			return "", err
+		}
+		doc, err := readLocalMarkdownDocument(path, o.ExternalKey)
+		return doc.Body, err
+	default:
 		return "", fmt.Errorf("document reading is not implemented for %s", o.Provider)
 	}
-	cli, e := newGHCLI(c.GHExecutablePath)
-	if e != nil {
-		return "", e
-	}
-	return cli.fetchDocument(classifiedExternalObject{o.Provider, o.Kind, o.ExternalKey, o.CanonicalURL})
 }
 func (r *Runtime) fetchExternalComments(id int64) ([]externalComment, error) {
 	o, c, e := r.objectAndContext(id)
 	if e != nil {
 		return nil, e
 	}
-	if o.Provider != domain.ProviderGitHub {
+	object := classifiedExternalObject{o.Provider, o.Kind, o.ExternalKey, o.CanonicalURL}
+	switch o.Provider {
+	case domain.ProviderGitHub:
+		cli, err := newGHCLI(c.GHExecutablePath)
+		if err != nil {
+			return nil, err
+		}
+		return cli.fetchComments(object)
+	case domain.ProviderAtlassian:
+		return fetchAtlassianComments(c, object)
+	case domain.ProviderAzureDevOps:
+		return fetchAzureComments(c, object)
+	case domain.ProviderGeneric:
+		if !strings.HasPrefix(o.ExternalKey, "local:") {
+			return nil, fmt.Errorf("comment reading is not implemented for %s", o.Provider)
+		}
+		s, err := r.stateSnapshot()
+		if err != nil {
+			return nil, err
+		}
+		path, err := r.localMarkdownPath(s, c, o.ExternalKey)
+		if err != nil {
+			return nil, err
+		}
+		return readLocalMarkdownComments(path)
+	default:
 		return nil, fmt.Errorf("comment reading is not implemented for %s", o.Provider)
 	}
-	cli, e := newGHCLI(c.GHExecutablePath)
-	if e != nil {
-		return nil, e
-	}
-	return cli.fetchComments(classifiedExternalObject{o.Provider, o.Kind, o.ExternalKey, o.CanonicalURL})
 }
 func (r *Runtime) addExternalComment(linkID int64, body string) (domain.ExternalLinkView, error) {
 	s, e := r.stateSnapshot()
@@ -435,7 +751,7 @@ func (r *Runtime) addExternalComment(linkID int64, body string) (domain.External
 		return domain.ExternalLinkView{}, e
 	}
 	if o.Provider != domain.ProviderGitHub || o.Kind == domain.ObjectGeneric {
-		return domain.ExternalLinkView{}, errors.New("Comments are only supported for GitHub Issues and pull requests")
+		return domain.ExternalLinkView{}, errors.New("Comments can be posted only to GitHub Issues and pull requests")
 	}
 	cli, e := newGHCLI(ctx.GHExecutablePath)
 	if e != nil {
@@ -452,17 +768,18 @@ func (r *Runtime) refreshExternalObject(id int64) (domain.ExternalSnapshot, erro
 	if e != nil {
 		return domain.ExternalSnapshot{}, e
 	}
-	if o.Provider != domain.ProviderGitHub {
+	s, e := r.stateSnapshot()
+	if e != nil {
+		return domain.ExternalSnapshot{}, e
+	}
+	fetchedPtr, e := r.fetchSnapshotForObject(s, c, classifiedExternalObject{o.Provider, o.Kind, o.ExternalKey, o.CanonicalURL})
+	if e != nil {
+		return domain.ExternalSnapshot{}, e
+	}
+	if fetchedPtr == nil {
 		return domain.ExternalSnapshot{}, fmt.Errorf("snapshot fetching is not implemented for %s", o.Provider)
 	}
-	cli, e := newGHCLI(c.GHExecutablePath)
-	if e != nil {
-		return domain.ExternalSnapshot{}, e
-	}
-	fetched, e := cli.fetchSnapshot(classifiedExternalObject{o.Provider, o.Kind, o.ExternalKey, o.CanonicalURL}, currentUnixSeconds())
-	if e != nil {
-		return domain.ExternalSnapshot{}, e
-	}
+	fetched := *fetchedPtr
 	snapshot := domain.ExternalSnapshot{ExternalObjectID: id, Title: fetched.Title, State: fetched.State, Metadata: metadataAsDomain(fetched.Metadata), FetchedAt: fetched.FetchedAt}
 	decision, e := r.transition(domain.Event{Kind: "refresh_external_object", ExternalObjectID: id, ExternalSnapshot: &snapshot})
 	if e != nil {
@@ -484,7 +801,7 @@ func (r *Runtime) pollExternalObjects() (PollResult, error) {
 	seen := map[int64]bool{}
 	for _, l := range s.Links {
 		for _, o := range s.ExternalObjects {
-			if o.ID == l.ExternalObjectID && o.Provider == domain.ProviderGitHub && !seen[o.ID] {
+			if o.ID == l.ExternalObjectID && (o.Provider != domain.ProviderGeneric || strings.HasPrefix(o.ExternalKey, "local:")) && !seen[o.ID] {
 				ids = append(ids, o.ID)
 				seen[o.ID] = true
 			}

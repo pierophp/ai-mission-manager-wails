@@ -279,6 +279,225 @@ esac
 	}
 }
 
+func TestAtlassianLinkFetchesDocumentsCommentsAndRefreshesThroughRuntime(t *testing.T) {
+	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "mission-manager.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	twg := fakeCommand(t, "twg", filepath.Join(t.TempDir(), "twg-args"), `case "$1 $2 $3" in
+"jira workitem get") printf '{"key":"APP-42","summary":"%s","status":"Open","description":"Description"}' "$TWG_TITLE" ;;
+"jira workitem comment") printf '%s' '{"comments":[{"id":8,"author":{"displayName":"Ada"},"body":"Note","created":"2026-09-01"}]}' ;;
+*) echo "unexpected TWG command: $*" >&2; exit 2 ;;
+esac`)
+	t.Setenv("TWG_TITLE", "Before")
+	service := CommandService{Runtime: rt}
+	if _, err = service.Invoke("create_item", `{"title":"Track Jira","contextId":1,"projectId":1,"notes":null}`); err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultContextConfiguration()
+	cfg.Name = "Personal"
+	cfg.TWGExecutablePath = &twg
+	cfg.AtlassianSite = stringPtr("acme.atlassian.net")
+	for i := range cfg.AttentionDefaults {
+		cfg.AttentionDefaults[i].ContextID = 1
+	}
+	if _, err = service.Invoke("update_context_configuration", mustJSON(t, map[string]any{"contextId": 1, "configuration": cfg})); err != nil {
+		t.Fatal(err)
+	}
+	linked, err := service.Invoke("link_external_object", `{"itemId":1,"url":"https://acme.atlassian.net/browse/APP-42"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action ExternalLinkAction
+	if err = json.Unmarshal(linked, &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Link.Snapshot == nil || action.Link.Snapshot.Title != "Before" {
+		t.Fatalf("link=%s", linked)
+	}
+	doc, err := service.Invoke("fetch_issue_document", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var issueDoc IssueDocument
+	if err = json.Unmarshal(doc, &issueDoc); err != nil || issueDoc.Body != "Description" {
+		t.Fatalf("document=%s err=%v", doc, err)
+	}
+	comments, err := service.Invoke("fetch_external_comments", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID))
+	if err != nil || !strings.Contains(string(comments), `"author":"Ada"`) {
+		t.Fatalf("comments=%s err=%v", comments, err)
+	}
+	t.Setenv("TWG_TITLE", "After")
+	refreshed, err := service.Invoke("refresh_external_object", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot domain.ExternalSnapshot
+	if err = json.Unmarshal(refreshed, &snapshot); err != nil || snapshot.Title != "After" {
+		t.Fatalf("snapshot=%s err=%v", refreshed, err)
+	}
+	poll, err := service.Invoke("poll_external_objects", `{}`)
+	if err != nil || !strings.Contains(string(poll), `"refreshed":1`) {
+		t.Fatalf("poll=%s err=%v", poll, err)
+	}
+}
+
+func TestMismatchedProviderContextKeepsLinkWarnsAndRefreshes(t *testing.T) {
+	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "mission-manager.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	argsPath := filepath.Join(t.TempDir(), "args")
+	twg := fakeCommand(t, "twg-mismatch", argsPath, `printf '%s' '{"key":"APP-9","summary":"Jira from configured CLI","status":"Open"}'`)
+	service := CommandService{Runtime: rt}
+	if _, err = service.Invoke("create_item", `{"title":"Track mismatch","contextId":1,"projectId":1,"notes":null}`); err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultContextConfiguration()
+	cfg.Name = "Personal"
+	cfg.TWGExecutablePath = &twg
+	cfg.AtlassianSite = stringPtr("acme.atlassian.net")
+	for i := range cfg.AttentionDefaults {
+		cfg.AttentionDefaults[i].ContextID = 1
+	}
+	if _, err = service.Invoke("update_context_configuration", mustJSON(t, map[string]any{"contextId": 1, "configuration": cfg})); err != nil {
+		t.Fatal(err)
+	}
+	linked, err := service.Invoke("link_external_object", `{"itemId":1,"url":"https://other.atlassian.net/browse/APP-9"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action ExternalLinkAction
+	if err = json.Unmarshal(linked, &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Warning == nil || !strings.Contains(*action.Warning, "The Link was created") || action.Link.Snapshot != nil {
+		t.Fatalf("mismatched link=%s", linked)
+	}
+	if _, err = service.Invoke("refresh_external_object", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID)); err == nil || !strings.Contains(err.Error(), "different site or organization") {
+		t.Fatalf("refresh with mismatched Context target = %v", err)
+	}
+	if _, err := os.Stat(argsPath); !os.IsNotExist(err) {
+		t.Fatalf("provider CLI must not run for a mismatched target; args file stat error = %v", err)
+	}
+}
+
+func TestAzureDevOpsLinkRefreshesThroughRuntime(t *testing.T) {
+	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "mission-manager.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	az := fakeCommand(t, "az", filepath.Join(t.TempDir(), "az-args"), `printf '{"id":42,"fields":{"System.Title":"%s","System.State":"Active","System.WorkItemType":"Bug","System.Description":"<p>Details</p>"}}' "$AZ_TITLE"`)
+	t.Setenv("AZ_TITLE", "Before")
+	service := CommandService{Runtime: rt}
+	if _, err = service.Invoke("create_item", `{"title":"Track Azure","contextId":1,"projectId":1,"notes":null}`); err != nil {
+		t.Fatal(err)
+	}
+	cfg := defaultContextConfiguration()
+	cfg.Name = "Personal"
+	cfg.AZExecutablePath = &az
+	cfg.AzureDevOpsOrganization = stringPtr("acme")
+	for i := range cfg.AttentionDefaults {
+		cfg.AttentionDefaults[i].ContextID = 1
+	}
+	if _, err = service.Invoke("update_context_configuration", mustJSON(t, map[string]any{"contextId": 1, "configuration": cfg})); err != nil {
+		t.Fatal(err)
+	}
+	linked, err := service.Invoke("link_external_object", `{"itemId":1,"url":"https://dev.azure.com/acme/apps/_workitems/edit/42"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action ExternalLinkAction
+	if err = json.Unmarshal(linked, &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Link.Snapshot == nil || action.Link.Snapshot.Title != "Before" {
+		t.Fatalf("link=%s", linked)
+	}
+	doc, err := service.Invoke("fetch_issue_document", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var azureDocument IssueDocument
+	if err = json.Unmarshal(doc, &azureDocument); err != nil || azureDocument.Body != "<p>Details</p>" {
+		t.Fatalf("document=%s", doc)
+	}
+	t.Setenv("AZ_TITLE", "After")
+	refreshed, err := service.Invoke("refresh_external_object", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot domain.ExternalSnapshot
+	if err = json.Unmarshal(refreshed, &snapshot); err != nil || snapshot.Title != "After" {
+		t.Fatalf("snapshot=%s err=%v", refreshed, err)
+	}
+}
+
+func TestLocalMarkdownSpecAndTicketsLinkReadAndPoll(t *testing.T) {
+	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "mission-manager.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	service := CommandService{Runtime: rt}
+	if _, err = service.Invoke("create_item", `{"title":"Track local feature","contextId":1,"projectId":1,"notes":null}`); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	feature := filepath.Join(root, "feature")
+	issues := filepath.Join(feature, "issues")
+	if err = os.MkdirAll(issues, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec := filepath.Join(feature, "spec.md")
+	ticket := filepath.Join(issues, "01-first.md")
+	if err = os.WriteFile(spec, []byte("# Local feature\nStatus: Open\nDescription\n## Comments\nPlease review\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(ticket, []byte("# First ticket\nStatus: Done\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := rt.stateSnapshot()
+	machineID := int64(1)
+	state.Contexts[0].ExecutionMachineID = &machineID
+	state.Machines = append(state.Machines, domain.Machine{ID: machineID, ContextID: 1, Name: "Local", Transport: domain.MachineTransport{Kind: domain.TransportLocal}})
+	state.Repositories = append(state.Repositories, domain.Repository{ID: 1, ProjectID: 1, Name: "repo"})
+	state.RepositoryLocations = append(state.RepositoryLocations, domain.RepositoryLocation{RepositoryID: 1, MachineID: machineID, CheckoutPath: root})
+	rt.mu.Lock()
+	rt.state = state
+	rt.mu.Unlock()
+	rt.SetMachineAdapters(NewFakeMachineAccess(), nil)
+	linked, err := service.Invoke("link_external_object", mustJSON(t, map[string]any{"itemId": 1, "url": spec}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action ExternalLinkAction
+	if err = json.Unmarshal(linked, &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Link.Snapshot == nil || action.Link.Snapshot.Title != "Local feature" || action.Link.Object.ExternalKey != "local:1#feature/spec.md" {
+		t.Fatalf("link=%s", linked)
+	}
+	doc, err := service.Invoke("fetch_issue_document", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed IssueDocument
+	if err = json.Unmarshal(doc, &parsed); err != nil || len(parsed.SubIssues) != 1 || parsed.SubIssues[0].Title != "First ticket" {
+		t.Fatalf("document=%s err=%v", doc, err)
+	}
+	comments, err := service.Invoke("fetch_external_comments", fmt.Sprintf(`{"externalObjectId":%d}`, action.Link.Object.ID))
+	if err != nil || !strings.Contains(string(comments), "Please review") {
+		t.Fatalf("comments=%s err=%v", comments, err)
+	}
+	if _, err = service.Invoke("poll_external_objects", `{}`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestAzureDevOpsIdentityCollisionReturnsDomainErrorBeforeSQLite(t *testing.T) {
 	rt, err := OpenRuntime(filepath.Join(t.TempDir(), "mission-manager.sqlite"))
 	if err != nil {
