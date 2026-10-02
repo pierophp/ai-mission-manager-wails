@@ -3,7 +3,6 @@ package backend
 import (
 	"errors"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -305,11 +304,7 @@ func (r *Runtime) openExternalTerminal(runID int64) error {
 	if err != nil {
 		return err
 	}
-	if _, err := exec.LookPath("osascript"); err != nil {
-		return fmt.Errorf("macOS Terminal is unavailable: %w", err)
-	}
-	script := "tell application \"Terminal\"\nactivate\ndo script " + appleScriptString(remote) + "\nend tell"
-	return exec.Command("osascript", "-e", script).Run()
+	return launchExternalTerminal(remote)
 }
 
 func buildExternalPaneCommand(machine domain.Machine, run domain.Run) (string, error) {
@@ -354,7 +349,4 @@ func (r *Runtime) runAndMachine(runID int64) (domain.Run, domain.Machine, bool) 
 		}
 	}
 	return domain.Run{}, domain.Machine{}, false
-}
-func appleScriptString(value string) string {
-	return "\"" + strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n").Replace(value) + "\""
 }
