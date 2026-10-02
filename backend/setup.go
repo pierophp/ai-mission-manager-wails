@@ -227,26 +227,28 @@ func (r *Runtime) resolveAndStoreExecutable(name, settingKey string) string {
 }
 
 func resolveExecutable(name, stored string) string {
-	if filepath.IsAbs(stored) && isExecutable(stored) {
-		return canonicalPath(stored)
+	if filepath.IsAbs(stored) && isExecutable(stored) && !isMiseProxy(stored, name) {
+		return filepath.Clean(stored)
 	}
 	path, err := exec.LookPath(name)
-	if err != nil || !isExecutable(path) {
+	if err != nil || !isExecutable(path) || isMiseProxy(path, name) {
 		return ""
 	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return ""
 	}
-	return canonicalPath(absolute)
+	// Preserve symlinks such as mise shims: mise uses the invoked filename
+	// (for example, "gh") to select the tool to run.
+	return filepath.Clean(absolute)
 }
 
-func canonicalPath(path string) string {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err == nil {
-		return resolved
+func isMiseProxy(path, name string) bool {
+	if filepath.Base(path) == name {
+		return false
 	}
-	return filepath.Clean(path)
+	resolved, err := filepath.EvalSymlinks(path)
+	return err == nil && filepath.Base(resolved) == "mise"
 }
 
 func isExecutable(path string) bool {
